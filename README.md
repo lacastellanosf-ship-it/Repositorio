@@ -28,6 +28,8 @@ La agenda del navegador guarda sus datos en IndexedDB, separados por navegador y
 
 El flujo de GitHub Actions publica automáticamente la versión WebAssembly estática al subir cambios a `main`. La aplicación y el código serán públicos; las citas que se creen desde la página permanecen en el almacenamiento local del navegador y no se envían a GitHub.
 
+Antes del primer despliegue, en el repositorio abre **Settings > Pages** y elige **GitHub Actions** como origen de publicación. La página estará en `https://<usuario>.github.io/<repositorio>/`.
+
 Esta publicación no aloja la API ASP.NET Core ni habilita sincronización en la nube. No uses datos reales o sensibles en esta versión de pruebas.
 
 ## Funciones
