@@ -1,6 +1,117 @@
-﻿<Router AppAssembly="typeof(Program).Assembly">
-    <Found Context="routeData">
-        <RouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)" />
-        <FocusOnNavigate RouteData="routeData" Selector="h1" />
-    </Found>
-</Router>
+@implements IDisposable
+@inject FirebaseClient Firebase
+
+@if (!isInitialized)
+{
+    <section class="loading-panel" role="status">
+        <span class="loader"></span>
+        <span>Comprobando acceso...</span>
+    </section>
+}
+else if (!string.IsNullOrWhiteSpace(initializationError))
+{
+    <main class="app-shell">
+        <div class="notice error-notice" role="alert">@initializationError</div>
+    </main>
+}
+else if (Firebase.IsConfigured && !Firebase.IsAuthenticated)
+{
+    <main class="app-shell firebase-login-shell">
+        <a class="brand" href="./" aria-label="Citas, agenda">
+            <span class="brand-mark">C</span>
+            <span>CITAS<span class="brand-dot">.</span></span>
+        </a>
+        <section class="firebase-login-panel">
+            <p class="eyebrow">ACCESO A LA AGENDA</p>
+            <h1>Agenda sincronizada</h1>
+            <p class="welcome-copy">Inicia sesión con la cuenta autorizada para consultar y actualizar las citas.</p>
+            @if (!string.IsNullOrWhiteSpace(loginError))
+            {
+                <div class="notice error-notice" role="alert">@loginError</div>
+            }
+            <form class="firebase-login-form" @onsubmit="SignIn" @onsubmit:preventDefault>
+                <label class="form-field">
+                    <span>Correo electrónico</span>
+                    <input type="email" @bind="email" autocomplete="username" required />
+                </label>
+                <label class="form-field">
+                    <span>Contraseña</span>
+                    <input type="password" @bind="password" autocomplete="current-password" required />
+                </label>
+                <button type="submit" class="primary-button" disabled="@isSigningIn">
+                    @(isSigningIn ? "Conectando..." : "Iniciar sesión")
+                </button>
+            </form>
+        </section>
+    </main>
+}
+else
+{
+    @if (migratedAppointments > 0)
+    {
+        <div class="app-shell">
+            <div class="notice success-notice" role="status">
+                Se importaron @migratedAppointments cita(s) guardadas en este dispositivo.
+            </div>
+        </div>
+    }
+    <Router AppAssembly="typeof(Program).Assembly">
+        <Found Context="routeData">
+            <RouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)" />
+            <FocusOnNavigate RouteData="routeData" Selector="h1" />
+        </Found>
+    </Router>
+}
+
+@code {
+    private bool isInitialized;
+    private bool isSigningIn;
+    private string email = "";
+    private string password = "";
+    private string? initializationError;
+    private string? loginError;
+    private int migratedAppointments;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Firebase.StateChanged += HandleFirebaseStateChanged;
+        try
+        {
+            await Firebase.InitializeAsync();
+        }
+        catch (JSException exception)
+        {
+            initializationError = FirebaseClient.UserFriendlyError(exception);
+        }
+        finally
+        {
+            isInitialized = true;
+        }
+    }
+
+    private async Task SignIn()
+    {
+        isSigningIn = true;
+        loginError = null;
+        migratedAppointments = 0;
+        try
+        {
+            migratedAppointments = await Firebase.SignInAsync(email.Trim(), password);
+            password = "";
+        }
+        catch (JSException exception)
+        {
+            loginError = FirebaseClient.UserFriendlyError(exception);
+        }
+        finally
+        {
+            isSigningIn = false;
+        }
+    }
+
+    private void HandleFirebaseStateChanged()
+        => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+        => Firebase.StateChanged -= HandleFirebaseStateChanged;
+}

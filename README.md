@@ -22,15 +22,32 @@ dotnet run --project Citaspp.Web\Citaspp.Web\Citaspp.Web.csproj --launch-profile
 
 Abre `http://localhost:5020`. La agenda permite navegar por semanas y meses, y crear, editar o eliminar citas. La API y su documentación OpenAPI están disponibles en `/swagger`.
 
-La agenda del navegador guarda sus datos en IndexedDB, separados por navegador y dispositivo. No existe sincronización con MEGA ni entre dispositivos. La API de pruebas del servidor mantiene una base SQLite en `%LOCALAPPDATA%\Citaspp\citas.db`; se puede cambiar su ruta con `CITASPP_DATABASE_PATH`.
+Sin configurar Firebase, la agenda del navegador guarda sus datos en IndexedDB, separados por navegador y dispositivo. La API de pruebas del servidor mantiene una base SQLite en `%LOCALAPPDATA%\Citaspp\citas.db`; se puede cambiar su ruta con `CITASPP_DATABASE_PATH`.
 
 ## Prueba pública en GitHub Pages
 
-El flujo de GitHub Actions publica automáticamente la versión WebAssembly estática al subir cambios a `main`. La aplicación y el código serán públicos; las citas que se creen desde la página permanecen en el almacenamiento local del navegador y no se envían a GitHub.
+El flujo de GitHub Actions publica automáticamente la versión WebAssembly estática al subir cambios a `main`. La aplicación y el código serán públicos. Sin configurar Firebase, las citas permanecen en el almacenamiento local del navegador y no se envían a GitHub.
 
 Antes del primer despliegue, en el repositorio abre **Settings > Pages** y elige **GitHub Actions** como origen de publicación. La página estará en `https://<usuario>.github.io/<repositorio>/`.
 
-Esta publicación no aloja la API ASP.NET Core ni habilita sincronización en la nube. No uses datos reales o sensibles en esta versión de pruebas.
+Al configurar Firebase, las citas se guardan en Cloud Firestore y se actualizan en tiempo real entre dispositivos. Los trabajadores, servicios, festivos y horario todavía se guardan localmente en cada navegador.
+
+### Activar Firebase Firestore
+
+1. Crea un proyecto Firebase, registra una aplicación web y activa **Cloud Firestore**.
+2. En **Authentication > Sign-in method**, activa **Correo electrónico/contraseña**. Crea manualmente los usuarios autorizados; la aplicación no ofrece registro público.
+3. En **Configuración del proyecto > Tus aplicaciones**, copia la configuración web en `Citaspp.Web\Citaspp.Web.Client\wwwroot\firebase-config.js`, sustituyendo los campos `PEGA_AQUI_...`.
+4. En **Authentication > Users**, confirma que el UID de cada usuario autorizado está incluido en la lista de `Citaspp.Web\firestore.rules`. La primera cuenta ya está añadida; agrega más UID a esa lista si hacen falta.
+5. Publica las reglas desde la carpeta `Citaspp.Web`:
+
+   ```powershell
+   firebase deploy --only firestore:rules --project <project-id>
+   ```
+
+6. En Firebase Authentication, añade `lacastellanosf-ship-it.github.io` a los dominios autorizados.
+7. Publica los cambios de la aplicación en GitHub Pages. Al abrir la página, inicia sesión con una cuenta cuyo UID esté autorizado.
+
+La configuración web de Firebase no es una contraseña; el control de acceso lo aplican las reglas de Firestore. No pongas contraseñas ni claves privadas de cuentas de servicio en `firebase-config.js`, y no cambies las reglas para permitir acceso público. En el primer inicio de sesión, si `eventos` está vacío, las citas de IndexedDB de ese dispositivo se importan una sola vez. Conviene hacerlo primero desde el dispositivo que contiene la agenda que quieras conservar. Los datos de otros dispositivos no se importan si la colección ya contiene citas.
 
 ## Funciones
 

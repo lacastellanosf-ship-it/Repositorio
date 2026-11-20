@@ -1,8 +1,10 @@
 @page "/"
+@implements IAsyncDisposable
 @using System.ComponentModel.DataAnnotations
 @using System.Globalization
 @inject HttpClient Http
 @inject IJSRuntime JavaScript
+@inject FirebaseClient Firebase
 
 <PageTitle>Citas | Agenda semanal</PageTitle>
 
@@ -13,12 +15,16 @@
             <span>CITAS<span class="brand-dot">.</span></span>
         </a>
         <div class="topbar-actions">
-            <div class="topbar-status"><span class="status-dot"></span> Agenda local</div>
-            <button type="button" class="header-action sync-button" title="Volver a cargar los datos guardados en este dispositivo" disabled="@isRefreshing" @onclick="RefreshSchedule">
+            <div class="topbar-status"><span class="status-dot"></span> @(Firebase.IsConfigured ? "Citas en la nube" : "Agenda local")</div>
+            <button type="button" class="header-action sync-button" title="@(Firebase.IsConfigured ? "Actualizar citas desde Firestore" : "Volver a cargar los datos guardados en este dispositivo")" disabled="@isRefreshing" @onclick="RefreshSchedule">
                 <span class="sync-icon @(isRefreshing ? "syncing" : "")">↻</span>
                 <span>Actualizar</span>
             </button>
             <a class="header-action" href="configuracion">Configuración</a>
+            @if (Firebase.IsAuthenticated)
+            {
+                <button type="button" class="header-action" @onclick="SignOut">Salir</button>
+            }
         </div>
     </header>
 
@@ -316,6 +322,8 @@
     private string? editorError;
     private string? editorWarning;
     private string? selectionError;
+    private DotNetObjectReference<Home>? firebaseCallback;
+    private int? firebaseSubscriptionId;
 
     private DateOnly WeekStart => selectedDate.AddDays(-(((int)selectedDate.DayOfWeek + 6) % 7));
     private DateOnly[] WeekDays => Enumerable.Range(0, 7).Select(offset => WeekStart.AddDays(offset)).ToArray();
@@ -336,19 +344,46 @@
         try
         {
             await LoadScheduleData();
+            await SubscribeAppointmentsToWeekAsync();
         }
         catch (HttpRequestException)
         {
-            errorMessage = "No se pudo conectar con la agenda local. Comprueba que el servidor esté iniciado.";
+            errorMessage = "No se pudo cargar la agenda. Comprueba la conexión.";
         }
         catch (System.Text.Json.JsonException)
         {
             errorMessage = "El servidor devolvió datos que no se pudieron interpretar.";
         }
+        catch (JSException exception)
+        {
+            errorMessage = FirebaseClient.UserFriendlyError(exception);
+        }
         finally
         {
             isLoading = false;
         }
+    }
+
+    private async Task SignOut()
+    {
+        try
+        {
+            await Firebase.SignOutAsync();
+        }
+        catch (JSException exception)
+        {
+            errorMessage = FirebaseClient.UserFriendlyError(exception);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (firebaseSubscriptionId is { } subscriptionId)
+        {
+            await Firebase.UnsubscribeAppointmentsAsync(subscriptionId);
+        }
+
+        firebaseCallback?.Dispose();
     }
 
     private async Task RefreshSchedule()
@@ -361,7 +396,9 @@
         }
         catch (HttpRequestException)
         {
-            errorMessage = "No se pudo actualizar la agenda desde la base de datos local.";
+            errorMessage = Firebase.IsConfigured
+                ? "No se pudieron actualizar las citas desde Firestore."
+                : "No se pudo actualizar la agenda local.";
         }
         catch (System.Text.Json.JsonException)
         {
@@ -402,6 +439,41 @@
         return await Http.GetFromJsonAsync<AppointmentResponse[]>($"api/appointments?start={start}&end={end}") ?? [];
     }
 
+    private async Task SubscribeAppointmentsToWeekAsync()
+    {
+        if (!Firebase.IsConfigured || !Firebase.IsAuthenticated)
+        {
+            return;
+        }
+
+        if (firebaseSubscriptionId is { } currentSubscription)
+        {
+            await Firebase.UnsubscribeAppointmentsAsync(currentSubscription);
+            firebaseSubscriptionId = null;
+        }
+
+        firebaseCallback ??= DotNetObjectReference.Create(this);
+        var start = new DateTimeOffset(DateTime.SpecifyKind(WeekStart.ToDateTime(TimeOnly.MinValue), DateTimeKind.Local));
+        var end = new DateTimeOffset(DateTime.SpecifyKind(WeekStart.AddDays(7).ToDateTime(TimeOnly.MinValue), DateTimeKind.Local));
+        firebaseSubscriptionId = await Firebase.SubscribeAppointmentsAsync(start, end, firebaseCallback);
+    }
+
+    [JSInvokable]
+    public Task OnFirebaseAppointmentsChanged(AppointmentResponse[] refreshedAppointments)
+        => InvokeAsync(() =>
+        {
+            appointments = refreshedAppointments;
+            StateHasChanged();
+        });
+
+    [JSInvokable]
+    public Task OnFirebaseAppointmentsError(string message)
+        => InvokeAsync(() =>
+        {
+            errorMessage = $"No se pudieron sincronizar las citas en tiempo real: {message}";
+            StateHasChanged();
+        });
+
     private async Task NavigateTo(DateOnly date)
     {
         selectedDate = date;
@@ -409,11 +481,16 @@
         try
         {
             await LoadAppointments();
+            await SubscribeAppointmentsToWeekAsync();
             errorMessage = null;
         }
         catch (HttpRequestException)
         {
             errorMessage = "No se pudieron cargar las citas de esa semana.";
+        }
+        catch (JSException exception)
+        {
+            errorMessage = FirebaseClient.UserFriendlyError(exception);
         }
     }
 
@@ -668,10 +745,15 @@
             selectedDate = DateOnly.FromDateTime(moveFirstAppointmentStartsAt);
             ClearSelection();
             await LoadAppointments();
+            await SubscribeAppointmentsToWeekAsync();
         }
         catch (HttpRequestException)
         {
             selectionError = "No se pudieron mover las citas seleccionadas.";
+        }
+        catch (JSException exception)
+        {
+            selectionError = FirebaseClient.UserFriendlyError(exception);
         }
         finally
         {

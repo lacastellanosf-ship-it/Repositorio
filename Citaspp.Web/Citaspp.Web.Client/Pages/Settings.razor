@@ -4,6 +4,7 @@
 @using Microsoft.AspNetCore.Components.Forms
 @inject HttpClient Http
 @inject NavigationManager Navigation
+@inject FirebaseClient Firebase
 
 <PageTitle>Citas | Configuración</PageTitle>
 
@@ -13,7 +14,13 @@
             <span class="brand-mark">C</span>
             <span>CITAS<span class="brand-dot">.</span></span>
         </a>
-        <a class="header-action" href="./">← Agenda</a>
+        <div class="topbar-actions">
+            <a class="header-action" href="./">← Agenda</a>
+            @if (Firebase.IsAuthenticated)
+            {
+                <button type="button" class="header-action" @onclick="SignOut">Salir</button>
+            }
+        </div>
     </header>
 
     <section class="welcome-row">
@@ -778,6 +785,18 @@
 
         configurationError = await ApiErrorReader.ReadAsync(response);
         return false;
+    }
+
+    private async Task SignOut()
+    {
+        try
+        {
+            await Firebase.SignOutAsync();
+        }
+        catch (JSException exception)
+        {
+            configurationError = FirebaseClient.UserFriendlyError(exception);
+        }
     }
 
     private sealed class WorkerEditModel(int id, string name, string color)

@@ -7,6 +7,7 @@ var builder = WebAssemblyHostBuilder.CreateDefault(args);
 builder.RootComponents.Add<Routes>("#app");
 builder.RootComponents.Add<HeadOutlet>("head::after");
 #endif
+builder.Services.AddScoped<FirebaseClient>();
 builder.Services.AddScoped<LocalApiMessageHandler>();
 builder.Services.AddScoped(sp => new HttpClient(
     sp.GetRequiredService<LocalApiMessageHandler>())

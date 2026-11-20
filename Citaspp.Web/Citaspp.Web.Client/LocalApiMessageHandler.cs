@@ -8,7 +8,9 @@ using Microsoft.JSInterop;
 
 namespace Citaspp.Web.Client;
 
-internal sealed class LocalApiMessageHandler(IJSRuntime jsRuntime) : HttpMessageHandler
+internal sealed class LocalApiMessageHandler(
+    IJSRuntime jsRuntime,
+    FirebaseClient firebaseClient) : HttpMessageHandler
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -45,6 +47,13 @@ internal sealed class LocalApiMessageHandler(IJSRuntime jsRuntime) : HttpMessage
             catch (JsonException)
             {
                 return CreateProblemResponse(request, (int)HttpStatusCode.BadRequest, "La solicitud no es válida.");
+            }
+            catch (JSException exception)
+            {
+                return CreateProblemResponse(
+                    request,
+                    (int)HttpStatusCode.BadGateway,
+                    FirebaseClient.UserFriendlyError(exception));
             }
         }
         finally
@@ -102,6 +111,16 @@ internal sealed class LocalApiMessageHandler(IJSRuntime jsRuntime) : HttpMessage
         LocalScheduleState state,
         CancellationToken cancellationToken)
     {
+        if (firebaseClient.IsConfigured)
+        {
+            if (!firebaseClient.IsAuthenticated)
+            {
+                throw new LocalApiException((int)HttpStatusCode.Unauthorized, "Inicia sesión para acceder a las citas.");
+            }
+
+            return await RouteCloudAppointmentsAsync(request, uri, segments, state, cancellationToken);
+        }
+
         if (segments.Length == 2 && request.Method == HttpMethod.Get)
         {
             var query = ParseQuery(uri.Query);
@@ -197,6 +216,144 @@ internal sealed class LocalApiMessageHandler(IJSRuntime jsRuntime) : HttpMessage
         }
 
         return new RouteResult((int)HttpStatusCode.NotFound);
+    }
+
+    private async Task<RouteResult> RouteCloudAppointmentsAsync(
+        HttpRequestMessage request,
+        Uri uri,
+        string[] segments,
+        LocalScheduleState state,
+        CancellationToken cancellationToken)
+    {
+        if (segments.Length == 2 && request.Method == HttpMethod.Get)
+        {
+            var query = ParseQuery(uri.Query);
+            if (!query.TryGetValue("start", out var startText) ||
+                !query.TryGetValue("end", out var endText) ||
+                !DateTimeOffset.TryParse(startText, CultureInfo.InvariantCulture, DateTimeStyles.None, out var start) ||
+                !DateTimeOffset.TryParse(endText, CultureInfo.InvariantCulture, DateTimeStyles.None, out var end) ||
+                start >= end)
+            {
+                return new RouteResult((int)HttpStatusCode.BadRequest);
+            }
+
+            var appointments = await firebaseClient.GetAppointmentsAsync(start, end);
+            return new RouteResult(
+                (int)HttpStatusCode.OK,
+                appointments.OrderBy(appointment => appointment.StartsAt).ToArray());
+        }
+
+        if (segments.Length == 2 && request.Method == HttpMethod.Post)
+        {
+            var body = await ReadBodyAsync<CreateAppointmentRequest>(request, cancellationToken);
+            ValidateRequest(body);
+            await RefreshCloudAppointmentsAsync(state);
+            var draft = SaveAppointment(
+                state,
+                null,
+                body.CustomerName,
+                body.Phone,
+                body.WorkerId,
+                body.ServiceId,
+                body.StartsAt);
+            var createdId = await firebaseClient.CreateAppointmentAsync(draft);
+            var saved = draft with { Id = createdId };
+            state.Appointments[^1] = saved;
+            return new RouteResult(
+                (int)HttpStatusCode.Created,
+                saved,
+                $"/api/appointments/{saved.Id}");
+        }
+
+        if (segments.Length == 3 && segments[2] == "move" && request.Method == HttpMethod.Post)
+        {
+            var body = await ReadBodyAsync<MoveAppointmentsRequest>(request, cancellationToken);
+            ValidateRequest(body);
+            await RefreshCloudAppointmentsAsync(state);
+            var affected = MoveAppointments(state, body);
+            var ids = body.AppointmentIds.ToHashSet();
+            var moved = state.Appointments.Where(appointment => ids.Contains(appointment.Id)).ToArray();
+            await firebaseClient.SaveMovedAppointmentsAsync(moved);
+            return new RouteResult((int)HttpStatusCode.OK, new BulkAppointmentsResponse(affected));
+        }
+
+        if (segments.Length == 3 && segments[2] == "bulk-delete" && request.Method == HttpMethod.Post)
+        {
+            var body = await ReadBodyAsync<DeleteAppointmentsRequest>(request, cancellationToken);
+            ValidateRequest(body);
+            await RefreshCloudAppointmentsAsync(state);
+            var ids = body.AppointmentIds.Distinct().ToHashSet();
+            if (ids.Any(id => id <= 0))
+            {
+                throw new LocalApiException((int)HttpStatusCode.BadRequest, "Selecciona al menos una cita válida.");
+            }
+
+            if (ids.Count == 0 || ids.Any(id => state.Appointments.All(appointment => appointment.Id != id)))
+            {
+                throw new LocalApiException((int)HttpStatusCode.NotFound, "No se encontraron todas las citas seleccionadas.");
+            }
+
+            await firebaseClient.DeleteAppointmentsAsync(ids.ToArray());
+            return new RouteResult((int)HttpStatusCode.OK, new BulkAppointmentsResponse(ids.Count));
+        }
+
+        if (segments.Length == 3 && int.TryParse(segments[2], NumberStyles.None, CultureInfo.InvariantCulture, out var id))
+        {
+            if (request.Method == HttpMethod.Get)
+            {
+                var existing = await firebaseClient.GetAppointmentAsync(id);
+                return existing is null
+                    ? new RouteResult((int)HttpStatusCode.NotFound)
+                    : new RouteResult((int)HttpStatusCode.OK, existing);
+            }
+
+            if (request.Method == HttpMethod.Put)
+            {
+                await RefreshCloudAppointmentsAsync(state);
+                if (state.Appointments.All(appointment => appointment.Id != id))
+                {
+                    return new RouteResult((int)HttpStatusCode.NotFound);
+                }
+
+                var body = await ReadBodyAsync<UpdateAppointmentRequest>(request, cancellationToken);
+                ValidateRequest(body);
+                var saved = SaveAppointment(
+                    state,
+                    id,
+                    body.CustomerName,
+                    body.Phone,
+                    body.WorkerId,
+                    body.ServiceId,
+                    body.StartsAt);
+                await firebaseClient.UpdateAppointmentAsync(saved);
+                return new RouteResult((int)HttpStatusCode.OK, saved);
+            }
+
+            if (request.Method == HttpMethod.Delete)
+            {
+                var existing = await firebaseClient.GetAppointmentAsync(id);
+                if (existing is null)
+                {
+                    return new RouteResult((int)HttpStatusCode.NotFound);
+                }
+
+                await firebaseClient.DeleteAppointmentAsync(id);
+                return new RouteResult((int)HttpStatusCode.NoContent);
+            }
+        }
+
+        return new RouteResult((int)HttpStatusCode.NotFound);
+    }
+
+    private async Task RefreshCloudAppointmentsAsync(LocalScheduleState state)
+    {
+        state.Appointments = (await firebaseClient.GetAllAppointmentsAsync()).ToList();
+        if (state.Appointments.Count > 0)
+        {
+            state.NextAppointmentId = Math.Max(
+                state.NextAppointmentId,
+                state.Appointments.Max(appointment => appointment.Id) + 1);
+        }
     }
 
     private async Task<RouteResult> RouteSettingsAsync(

@@ -1,0 +1,18 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function hasAgendaAccess() {
+      return request.auth != null
+        && request.auth.uid in ["ENQUYqGqpgQK8L5Uoe7tnGWe2Xg2"];
+    }
+
+    match /eventos/{eventId} {
+      allow read, write: if hasAgendaAccess();
+    }
+
+    match /metadata/{documentId} {
+      allow read, write: if hasAgendaAccess();
+    }
+  }
+}

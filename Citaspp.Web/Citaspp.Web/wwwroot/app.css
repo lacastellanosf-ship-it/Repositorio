@@ -362,6 +362,45 @@ h1 span {
     color-scheme: dark;
 }
 
+.firebase-login-shell {
+    display: grid;
+    min-height: 100vh;
+    align-content: start;
+    justify-items: start;
+    gap: 48px;
+    padding-top: 24px;
+}
+
+.firebase-login-panel {
+    width: min(100%, 440px);
+    justify-self: center;
+    padding: 30px;
+    border: 1px solid #252e3a;
+    border-radius: 15px;
+    background: rgba(17, 24, 34, .96);
+}
+
+.firebase-login-panel .welcome-copy {
+    margin-bottom: 0;
+}
+
+.firebase-login-panel h1 {
+    margin: 0 0 10px;
+    color: #eef2f8;
+    font-size: 26px;
+}
+
+.firebase-login-form {
+    display: grid;
+    gap: 16px;
+    margin-top: 24px;
+}
+
+.firebase-login-form .primary-button {
+    justify-content: center;
+    min-height: 42px;
+}
+
 .calendar-controls .outline-button {
     min-height: 40px;
     padding: 0 12px;
