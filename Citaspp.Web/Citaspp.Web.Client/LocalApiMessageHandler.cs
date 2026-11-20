@@ -444,6 +444,21 @@ internal sealed class LocalApiMessageHandler(IJSRuntime jsRuntime) : HttpMessage
             throw new LocalApiException((int)HttpStatusCode.NotFound, "No se encontró la cita que se intenta editar.");
         }
 
+        if (appointmentId is null)
+        {
+            var appointmentLocalStart = startsAt.LocalDateTime;
+            var now = DateTime.Now;
+            if (appointmentLocalStart.Date < now.Date)
+            {
+                throw new LocalApiException((int)HttpStatusCode.BadRequest, "No se pueden crear citas en días pasados.");
+            }
+
+            if (appointmentLocalStart.Date == now.Date && startsAt <= DateTimeOffset.Now)
+            {
+                throw new LocalApiException((int)HttpStatusCode.BadRequest, "No se pueden crear citas en una hora que ya ha pasado.");
+            }
+        }
+
         if (state.Workers.All(worker => worker.Id != workerId))
         {
             throw new LocalApiException((int)HttpStatusCode.BadRequest, "El trabajador seleccionado ya no está disponible.");

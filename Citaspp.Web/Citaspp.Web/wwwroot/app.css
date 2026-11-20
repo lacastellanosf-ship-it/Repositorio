@@ -362,6 +362,23 @@ h1 span {
     color-scheme: dark;
 }
 
+.calendar-controls .outline-button {
+    min-height: 40px;
+    padding: 0 12px;
+    font-size: 13px;
+}
+
+.calendar-controls .date-picker {
+    height: 40px;
+    gap: 9px;
+    padding: 0 10px;
+}
+
+.calendar-controls .date-picker input {
+    width: 125px;
+    font-size: 12px;
+}
+
 .worker-legend {
     display: flex;
     min-height: 54px;
@@ -416,7 +433,7 @@ h1 span {
     align-items: flex-end;
     padding: 0 0 12px 10px;
     color: #667487;
-    font-size: 8px;
+    font-size: 10px;
     font-weight: 700;
     letter-spacing: .1em;
 }
@@ -509,8 +526,8 @@ h1 span {
     z-index: 1;
     width: 100%;
     transform: translateY(-50%);
-    color: #748195;
-    font-size: 9px;
+    color: #98a4b5;
+    font-size: 12px;
     font-variant-numeric: tabular-nums;
     text-align: center;
 }
@@ -1269,17 +1286,17 @@ h1 span {
         gap: 4px;
     }
 
-    .outline-button {
-        padding: 0 7px;
-        font-size: 10px;
+    .calendar-controls .outline-button {
+        padding: 0 9px;
+        font-size: 12px;
     }
 
     .date-picker {
         margin-left: 0;
     }
 
-    .date-picker input {
-        width: 104px;
+    .calendar-controls .date-picker input {
+        width: 112px;
     }
 
     .worker-legend {

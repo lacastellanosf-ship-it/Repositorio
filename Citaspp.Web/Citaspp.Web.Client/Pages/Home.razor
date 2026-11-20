@@ -510,14 +510,76 @@
         editingId = null;
         editorError = null;
         var appointmentDate = date ?? selectedDate;
+        DateTime startsAt;
+        if (time is { } selectedTime)
+        {
+            startsAt = appointmentDate.ToDateTime(selectedTime);
+        }
+        else if (appointmentDate == DateOnly.FromDateTime(DateTime.Today))
+        {
+            if (!TryGetDefaultAppointmentStart(appointmentDate, out startsAt))
+            {
+                errorMessage = "No quedan horarios disponibles hoy. Elige otra fecha para crear la cita.";
+                return;
+            }
+        }
+        else
+        {
+            startsAt = appointmentDate.ToDateTime(settings!.StartTime);
+        }
+
+        if (PastAppointmentError(startsAt) is { } pastError)
+        {
+            errorMessage = pastError;
+            return;
+        }
+
+        errorMessage = null;
         editorWarning = SpecialDayWarning(appointmentDate);
         form = new AppointmentForm
         {
-            StartsAt = appointmentDate.ToDateTime(time ?? settings!.StartTime),
+            StartsAt = startsAt,
             WorkerId = workerId ?? workers.FirstOrDefault()?.Id ?? 1,
             ServiceId = services.FirstOrDefault()?.Id ?? 1
         };
         isEditorOpen = true;
+    }
+
+    private bool TryGetDefaultAppointmentStart(DateOnly date, out DateTime startsAt)
+    {
+        var openingTime = date.ToDateTime(settings!.StartTime);
+        var now = DateTime.Now;
+        if (openingTime > now)
+        {
+            startsAt = openingTime;
+            return true;
+        }
+
+        var elapsedQuarterHours = (int)Math.Floor(now.TimeOfDay.TotalMinutes / 15) + 1;
+        var nextSlot = date.ToDateTime(TimeOnly.MinValue).AddMinutes(elapsedQuarterHours * 15);
+        var serviceDuration = services.FirstOrDefault()?.DurationMinutes ?? 0;
+        var latestStart = date.ToDateTime(settings.EndTime).AddMinutes(-serviceDuration);
+        if (nextSlot <= latestStart)
+        {
+            startsAt = nextSlot;
+            return true;
+        }
+
+        startsAt = openingTime;
+        return false;
+    }
+
+    private static string? PastAppointmentError(DateTime startsAt)
+    {
+        var now = DateTime.Now;
+        if (DateOnly.FromDateTime(startsAt) < DateOnly.FromDateTime(now))
+        {
+            return "No se pueden crear citas en días pasados.";
+        }
+
+        return DateOnly.FromDateTime(startsAt) == DateOnly.FromDateTime(now) && startsAt <= now
+            ? "No se pueden crear citas en una hora que ya ha pasado."
+            : null;
     }
 
     private void OpenEditAppointment(AppointmentResponse appointment)
@@ -658,6 +720,12 @@
         editorError = null;
         try
         {
+            if (editingId is null && PastAppointmentError(form.StartsAt) is { } pastError)
+            {
+                editorError = pastError;
+                return;
+            }
+
             var startsAt = new DateTimeOffset(DateTime.SpecifyKind(form.StartsAt, DateTimeKind.Local));
             HttpResponseMessage response;
             if (editingId is { } id)

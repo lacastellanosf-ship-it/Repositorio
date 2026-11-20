@@ -462,6 +462,14 @@ public sealed class AppointmentRepository
             throw new ArgumentException("Introduce un teléfono de 9 dígitos o uno internacional de 12 dígitos.");
         }
 
+        if (appointmentId is null && startsAt <= DateTime.Now)
+        {
+            var message = startsAt.Date < DateTime.Today
+                ? "No se pueden crear citas en días pasados."
+                : "No se pueden crear citas en una hora que ya ha pasado.";
+            throw new ArgumentException(message);
+        }
+
         var settings = GetSettings();
         var worker = GetWorkers().FirstOrDefault(candidate => candidate.Id == workerId)
             ?? throw new ArgumentException("El trabajador seleccionado ya no está disponible.");
