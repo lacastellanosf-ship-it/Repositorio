@@ -1,0 +1,15 @@
+Citaspp - paquete de prueba para Windows x64
+
+1. Extrae todo el contenido del ZIP en una carpeta del PC.
+2. Ejecuta Start-Citaspp.bat.
+3. La agenda se abrira en el navegador en http://localhost:5020/.
+4. Cierra la ventana "Citaspp - servidor local" para detener la aplicacion.
+
+El paquete incluye el runtime de .NET y no requiere instalarlo por separado.
+La agenda web guarda sus datos en el almacenamiento local del navegador de ese PC.
+Cada navegador y cada ordenador tienen sus propios datos; esta version no sincroniza
+con otros dispositivos y todavia no incluye sincronizacion con MEGA.
+
+Para usar la aplicacion sin conexion a Internet, abre la agenda al menos una vez
+en ese navegador. La conexion de red local sigue siendo necesaria para acceder
+desde otro dispositivo; este paquete se configura para uso en el propio PC.

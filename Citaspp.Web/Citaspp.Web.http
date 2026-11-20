@@ -1,0 +1,115 @@
+@baseUrl = http://localhost:5020
+
+### Get weekly appointments (end is exclusive)
+GET {{baseUrl}}/api/appointments?start=2026-03-16T00:00:00%2B01:00&end=2026-03-23T00:00:00%2B01:00
+
+### Get one appointment
+GET {{baseUrl}}/api/appointments/1
+
+### Create an appointment
+POST {{baseUrl}}/api/appointments
+Content-Type: application/json
+
+{
+  "customerName": "Cliente de prueba",
+  "phone": "987654321",
+  "workerId": 1,
+  "serviceId": 1,
+  "startsAt": "2026-03-16T09:00:00+01:00"
+}
+
+### Update an appointment
+PUT {{baseUrl}}/api/appointments/1
+Content-Type: application/json
+
+{
+  "customerName": "Cliente actualizado",
+  "phone": "987654321",
+  "workerId": 1,
+  "serviceId": 1,
+  "startsAt": "2026-03-16T09:15:00+01:00"
+}
+
+### Delete an appointment
+DELETE {{baseUrl}}/api/appointments/1
+
+### Move multiple appointments, preserving their relative date/time offsets
+POST {{baseUrl}}/api/appointments/move
+Content-Type: application/json
+
+{
+  "appointmentIds": [1, 2],
+  "firstAppointmentStartsAt": "2026-03-16T10:00:00+01:00"
+}
+
+### Delete multiple appointments atomically
+POST {{baseUrl}}/api/appointments/bulk-delete
+Content-Type: application/json
+
+{
+  "appointmentIds": [1, 2]
+}
+
+### Get workers, services, holidays, and schedule settings
+GET {{baseUrl}}/api/workers
+
+###
+GET {{baseUrl}}/api/services
+
+###
+GET {{baseUrl}}/api/holidays
+
+###
+GET {{baseUrl}}/api/settings
+
+### Update schedule settings
+PUT {{baseUrl}}/api/settings
+Content-Type: application/json
+
+{
+  "startTime": "09:00:00",
+  "endTime": "17:00:00",
+  "workDays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+  "workerCount": 2
+}
+
+### Update a worker
+PUT {{baseUrl}}/api/workers/1
+Content-Type: application/json
+
+{
+  "name": "Trabajador 1",
+  "color": "#13CBE8"
+}
+
+### Create a service
+POST {{baseUrl}}/api/services
+Content-Type: application/json
+
+{
+  "name": "Consulta",
+  "durationMinutes": 30
+}
+
+### Update a service
+PUT {{baseUrl}}/api/services/1
+Content-Type: application/json
+
+{
+  "name": "Consulta",
+  "durationMinutes": 30
+}
+
+### Delete a service (only if no appointment uses it)
+DELETE {{baseUrl}}/api/services/1
+
+### Create or update a holiday
+PUT {{baseUrl}}/api/holidays/2026-03-19
+Content-Type: application/json
+
+{
+  "name": "Festivo local"
+}
+
+### Delete a holiday
+DELETE {{baseUrl}}/api/holidays/2026-03-19

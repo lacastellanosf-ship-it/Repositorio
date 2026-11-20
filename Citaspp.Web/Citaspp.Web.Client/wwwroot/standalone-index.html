@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#153a52" />
+    <base href="./" />
+    <link rel="stylesheet" href="bootstrap/bootstrap.min.css" />
+    <link rel="stylesheet" href="app.css" />
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="apple-touch-icon" sizes="192x192" href="icon-192.png" />
+    <link rel="apple-touch-icon" sizes="512x512" href="icon-512.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <title>Citas | Agenda</title>
+    <script>
+        (() => {
+            const route = new URLSearchParams(location.search).get("__citaspp_route");
+            if (route === null) return;
+
+            const basePath = new URL(".", location.href).pathname;
+            const destination = new URL(route, location.origin);
+            const routePath = `${basePath}${destination.pathname.replace(/^\/+/, "")}`;
+            history.replaceState(null, "", `${routePath}${destination.search}${destination.hash}`);
+        })();
+    </script>
+</head>
+<body>
+    <div id="app">
+        <section class="loading-panel" role="status">
+            <span class="loader"></span>
+            <span>Cargando agenda...</span>
+        </section>
+    </div>
+    <script src="citaspp-storage.js"></script>
+    <script src="_framework/blazor.webassembly.js"></script>
+    <script>navigator.serviceWorker?.register("service-worker.js");</script>
+</body>
+</html>

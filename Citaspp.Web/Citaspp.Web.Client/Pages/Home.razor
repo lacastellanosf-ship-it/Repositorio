@@ -1,0 +1,754 @@
+@page "/"
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@inject HttpClient Http
+@inject IJSRuntime JavaScript
+
+<PageTitle>Citas | Agenda semanal</PageTitle>
+
+<main class="app-shell">
+    <header class="topbar">
+        <a class="brand" href="./" aria-label="Citas, agenda">
+            <span class="brand-mark">C</span>
+            <span>CITAS<span class="brand-dot">.</span></span>
+        </a>
+        <div class="topbar-actions">
+            <div class="topbar-status"><span class="status-dot"></span> Agenda local</div>
+            <button type="button" class="header-action sync-button" title="Volver a cargar los datos guardados en este dispositivo" disabled="@isRefreshing" @onclick="RefreshSchedule">
+                <span class="sync-icon @(isRefreshing ? "syncing" : "")">↻</span>
+                <span>Actualizar</span>
+            </button>
+            <a class="header-action" href="configuracion">Configuración</a>
+        </div>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(errorMessage))
+    {
+        <div class="notice error-notice" role="alert">
+            <span>@errorMessage</span>
+            <button type="button" class="icon-button" aria-label="Cerrar aviso" @onclick="() => errorMessage = null">×</button>
+        </div>
+    }
+
+    @if (isLoading)
+    {
+        <section class="loading-panel" aria-live="polite">
+            <span class="loader"></span>
+            <span>Cargando agenda...</span>
+        </section>
+    }
+    else if (settings is not null)
+    {
+        <section class="welcome-row">
+            <div>
+                <p class="eyebrow">TU ESPACIO DE TRABAJO</p>
+                <h1>Agenda <span>semanal</span></h1>
+                <p class="welcome-copy">Organiza las citas de tu equipo de un vistazo.</p>
+            </div>
+            <button type="button" class="primary-button" @onclick="OpenNewAppointment">
+                <span class="button-plus">+</span> Nueva cita
+            </button>
+        </section>
+
+        <section class="stats-grid" aria-label="Resumen de la semana">
+            <article class="stat-card stat-cyan">
+                <span class="stat-icon">◷</span>
+                <div><span class="stat-label">CITAS ESTA SEMANA</span><strong>@appointments.Length</strong></div>
+                <span class="stat-accent"></span>
+            </article>
+            <article class="stat-card stat-lime">
+                <span class="stat-icon">◎</span>
+                <div><span class="stat-label">CLIENTES</span><strong>@appointments.Select(item => item.Phone).Distinct().Count()</strong></div>
+                <span class="stat-accent"></span>
+            </article>
+        </section>
+
+        <section class="agenda-panel">
+            <div class="agenda-toolbar">
+                <div class="toolbar-title">
+                    <span class="section-kicker">PLANIFICACIÓN</span>
+                    <h2>@WeekTitle</h2>
+                </div>
+                <div class="calendar-controls">
+                    <div class="period-buttons">
+                        <button type="button" class="outline-button" @onclick="() => MoveWeek(-1)">‹ <span>Semana</span></button>
+                        <button type="button" class="outline-button" @onclick="GoToCurrentWeek">Hoy</button>
+                        <button type="button" class="outline-button" @onclick="() => MoveWeek(1)"><span>Semana</span> ›</button>
+                    </div>
+                    <div class="period-buttons month-buttons">
+                        <button type="button" class="outline-button" aria-label="Mes anterior" @onclick="() => MoveMonth(-1)">«</button>
+                        <button type="button" class="outline-button" aria-label="Mes siguiente" @onclick="() => MoveMonth(1)">»</button>
+                    </div>
+                    <label class="date-picker" aria-label="Elegir fecha">
+                        <span>▦</span>
+                        <input type="date" value="@selectedDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)" @onchange="HandleDateChange" />
+                    </label>
+                </div>
+            </div>
+
+            <div class="worker-legend" aria-label="Trabajadores y colores de agenda">
+                @foreach (var worker in workers)
+                {
+                    <span class="legend-item">
+                        <span class="legend-dot" style="--worker-color:@worker.Color;background-color:@worker.Color"></span>
+                        <span>@worker.Name</span>
+                    </span>
+                }
+            </div>
+
+            @if (selectedAppointmentIds.Count > 0)
+            {
+                <div class="selection-toolbar" role="region" aria-label="Acciones para citas seleccionadas">
+                    <span>@selectedAppointmentIds.Count cita(s) seleccionada(s). Usa Mayús+clic para añadir o quitar citas.</span>
+                    @if (!string.IsNullOrWhiteSpace(selectionError))
+                    {
+                        <span class="selection-error" role="alert">@selectionError</span>
+                    }
+                    <div class="selection-actions">
+                        <button type="button" class="outline-button" disabled="@isBulkSaving" @onclick="OpenMoveDialog">Mover selección</button>
+                        <button type="button" class="danger-button" disabled="@isBulkSaving" @onclick="DeleteSelectedAppointments">
+                            @(isBulkSaving ? "Procesando..." : "Eliminar selección")
+                        </button>
+                        <button type="button" class="icon-button" aria-label="Quitar selección" @onclick="ClearSelection">×</button>
+                    </div>
+                </div>
+            }
+
+            <div class="calendar-scroll">
+                <div class="week-grid" style="--day-count:7">
+                    <div class="time-column">
+                        <div class="time-heading">HORA</div>
+                        <div class="time-track" style="height:@(ScheduleHeight)px">
+                            @foreach (var time in TimeLabels)
+                            {
+                                <span class="time-label" style="top:@(TimeOffset(time) + 15 * PixelsPerMinute)px">@time.ToString("HH:mm")</span>
+                            }
+                        </div>
+                    </div>
+                    @foreach (var day in WeekDays)
+                    {
+                        var holiday = FindHoliday(day);
+                        var isWorkingDay = settings.WorkDays.Contains(day.DayOfWeek.ToString(), StringComparer.Ordinal);
+                        var isWeekend = day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+                        var isSpecialDay = holiday is not null || isWeekend;
+                        <section class="day-column @(!isWorkingDay ? "day-off" : "") @(isSpecialDay ? "day-special" : "")">
+                            <header class="day-heading @(day == DateOnly.FromDateTime(DateTime.Today) ? "today" : "")">
+                                <span>@day.ToString("ddd", SpanishCulture).ToUpperInvariant()</span>
+                                <strong>@day.Day</strong>
+                                @if (holiday is not null)
+                                {
+                                    <small title="@holiday.Name">Festivo</small>
+                                }
+                                else if (isWeekend)
+                                {
+                                    <small>Fin de semana</small>
+                                }
+                            </header>
+                            <div class="day-track" style="height:@(ScheduleHeight)px" aria-label="@day.ToString("dddd d MMMM", SpanishCulture)">
+                                @foreach (var worker in workers)
+                                {
+                                    @foreach (var time in SlotTimes)
+                                    {
+                                        <button type="button"
+                                                class="empty-slot"
+                                                style="@EmptySlotStyle(worker, time)"
+                                                title="@(isSpecialDay ? "Clic para crear cita con aviso" : "Doble clic para crear cita")"
+                                                aria-label="@EmptySlotLabel(day, time, worker)"
+                                                @onclick="() => HandleEmptySlotClick(day, time, worker.Id, isSpecialDay)"
+                                                @ondblclick="() => OpenNewAppointment(day, time, worker.Id)"></button>
+                                    }
+                                }
+                                @foreach (var appointment in AppointmentsFor(day))
+                                {
+                                    <button type="button"
+                                            class="appointment-card @(appointment.DurationMinutes <= 15 ? "compact" : "") @(selectedAppointmentIds.Contains(appointment.Id) ? "selected" : "")"
+                                            style="@AppointmentStyle(appointment)"
+                                            title="@($"{appointment.CustomerName} · {appointment.StartsAt.LocalDateTime:HH:mm} · {appointment.ServiceName}")"
+                                            aria-pressed="@selectedAppointmentIds.Contains(appointment.Id)"
+                                            @onclick="args => HandleAppointmentClick(appointment, args)">
+                                        <strong>@appointment.CustomerName</strong>
+                                        @if (appointment.DurationMinutes > 15)
+                                        {
+                                            <span>@appointment.StartsAt.LocalDateTime.ToString("HH:mm") · @WorkerName(appointment.WorkerId)</span>
+                                        }
+                                    </button>
+                                }
+                                @if (isSpecialDay)
+                                {
+                                    <div class="holiday-shade" title="@(holiday?.Name ?? "Fin de semana")"></div>
+                                }
+                            </div>
+
+                        </section>
+                    }
+                </div>
+            </div>
+            <footer class="agenda-footer">
+                <span><span class="footer-dot"></span> Horario @settings.StartTime.ToString("HH:mm") – @settings.EndTime.ToString("HH:mm")</span>
+                <span>Las citas se guardan automáticamente</span>
+            </footer>
+        </section>
+    }
+</main>
+
+@if (isEditorOpen)
+{
+    <div class="modal-backdrop" role="presentation" @onclick="CloseEditor">
+        <section class="appointment-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" @onclick:stopPropagation="true">
+            <header class="modal-header">
+                <div>
+                    <p class="eyebrow">DETALLES DE LA RESERVA</p>
+                    <h2 id="modal-title">@(editingId.HasValue ? "Editar cita" : "Nueva cita")</h2>
+                </div>
+                <button type="button" class="icon-button" aria-label="Cerrar" @onclick="CloseEditor">×</button>
+            </header>
+            @if (!string.IsNullOrWhiteSpace(editorWarning))
+            {
+                <div class="notice special-day-notice" role="status">@editorWarning</div>
+            }
+            <EditForm Model="form" OnValidSubmit="SaveAppointment">
+                <DataAnnotationsValidator />
+                <ValidationSummary />
+                <label class="form-field">
+                    <span>Nombre del cliente</span>
+                    <InputText @bind-Value="form.CustomerName" maxlength="100" autocomplete="name" />
+                    <ValidationMessage For="() => form.CustomerName" />
+                </label>
+                <label class="form-field">
+                    <span>Teléfono <small>9 dígitos o 12 con prefijo internacional</small></span>
+                    <InputText @bind-Value="form.Phone" inputmode="numeric" pattern="[0-9]{9}|[0-9]{12}" maxlength="12" autocomplete="tel" />
+                    <ValidationMessage For="() => form.Phone" />
+                </label>
+                <div class="form-row">
+                    <label class="form-field">
+                        <span>Trabajador</span>
+                        <InputSelect @bind-Value="form.WorkerId">
+                            @foreach (var worker in workers)
+                            {
+                                <option value="@worker.Id">@worker.Name</option>
+                            }
+                        </InputSelect>
+                    </label>
+                    <label class="form-field">
+                        <span>Servicio</span>
+                        <InputSelect @bind-Value="form.ServiceId">
+                            @foreach (var service in services)
+                            {
+                                <option value="@service.Id">@service.Name (@service.DurationMinutes min)</option>
+                            }
+                        </InputSelect>
+                    </label>
+                </div>
+                <label class="form-field">
+                    <span>Fecha y hora</span>
+                    <InputDate @bind-Value="form.StartsAt" Type="InputDateType.DateTimeLocal" />
+                </label>
+                @if (!string.IsNullOrWhiteSpace(editorError))
+                {
+                    <div class="notice error-notice" role="alert">@editorError</div>
+                }
+                <footer class="modal-actions">
+                    @if (editingId.HasValue)
+                    {
+                        <button type="button" class="danger-button" @onclick="DeleteAppointment">Eliminar</button>
+                    }
+                    <button type="button" class="outline-button" @onclick="CloseEditor">Cancelar</button>
+                    <button type="submit" class="primary-button" disabled="@isSaving">
+                        @(isSaving ? "Guardando..." : "Guardar cita")
+                    </button>
+                </footer>
+            </EditForm>
+        </section>
+    </div>
+}
+
+@if (isMoveDialogOpen)
+{
+    <div class="modal-backdrop" role="presentation" @onclick="CloseMoveDialog">
+        <section class="appointment-modal bulk-move-modal" role="dialog" aria-modal="true" aria-labelledby="move-modal-title" @onclick:stopPropagation="true">
+            <header class="modal-header">
+                <div>
+                    <p class="eyebrow">REPROGRAMACIÓN EN GRUPO</p>
+                    <h2 id="move-modal-title">Mover citas</h2>
+                </div>
+                <button type="button" class="icon-button" aria-label="Cerrar" @onclick="CloseMoveDialog">×</button>
+            </header>
+            <p class="welcome-copy">Elige el nuevo inicio de la primera cita seleccionada. Se mantendrán los intervalos entre las demás citas y cada trabajador asignado.</p>
+            <label class="form-field">
+                <span>Nuevo inicio del grupo</span>
+                <InputDate @bind-Value="moveFirstAppointmentStartsAt" Type="InputDateType.DateTimeLocal" />
+            </label>
+            @if (!string.IsNullOrWhiteSpace(selectionError))
+            {
+                <div class="notice error-notice" role="alert">@selectionError</div>
+            }
+            <footer class="modal-actions">
+                <button type="button" class="outline-button" @onclick="CloseMoveDialog">Cancelar</button>
+                <button type="button" class="primary-button" disabled="@isBulkSaving" @onclick="MoveSelectedAppointments">
+                    @(isBulkSaving ? "Moviendo..." : "Mover citas")
+                </button>
+            </footer>
+        </section>
+    </div>
+}
+
+@code {
+    private static readonly CultureInfo SpanishCulture = CultureInfo.GetCultureInfo("es-ES");
+    private const double PixelsPerMinute = 1.6;
+    private readonly DateOnly today = DateOnly.FromDateTime(DateTime.Today);
+    private DateOnly selectedDate = DateOnly.FromDateTime(DateTime.Today);
+    private AppointmentResponse[] appointments = [];
+    private WorkerResponse[] workers = [];
+    private ServiceResponse[] services = [];
+    private HolidayResponse[] holidays = [];
+    private ScheduleSettingsResponse? settings;
+    private AppointmentForm form = new();
+    private int? editingId;
+    private bool isLoading = true;
+    private bool isRefreshing;
+    private bool isEditorOpen;
+    private bool isSaving;
+    private bool isMoveDialogOpen;
+    private bool isBulkSaving;
+    private DateTime moveFirstAppointmentStartsAt = DateTime.Today.AddHours(9);
+    private HashSet<int> selectedAppointmentIds = [];
+    private string? errorMessage;
+    private string? editorError;
+    private string? editorWarning;
+    private string? selectionError;
+
+    private DateOnly WeekStart => selectedDate.AddDays(-(((int)selectedDate.DayOfWeek + 6) % 7));
+    private DateOnly[] WeekDays => Enumerable.Range(0, 7).Select(offset => WeekStart.AddDays(offset)).ToArray();
+    private string WeekTitle => $"{WeekStart.ToString("d MMM", SpanishCulture)} – {WeekStart.AddDays(6).ToString("d MMM yyyy", SpanishCulture)}";
+    private double ScheduleHeight => settings is null ? 0 : (settings.EndTime.ToTimeSpan() - settings.StartTime.ToTimeSpan()).TotalMinutes * PixelsPerMinute;
+    private IEnumerable<TimeOnly> TimeLabels => settings is null
+        ? []
+        : Enumerable.Range(0, (int)Math.Ceiling((settings.EndTime.ToTimeSpan() - settings.StartTime.ToTimeSpan()).TotalMinutes / 30))
+            .Select(index => settings.StartTime.AddMinutes(index * 30));
+    private TimeOnly[] SlotTimes => settings is null
+        ? []
+        : Enumerable.Range(0, (int)((settings.EndTime.ToTimeSpan() - settings.StartTime.ToTimeSpan()).TotalMinutes / 15))
+            .Select(index => settings.StartTime.AddMinutes(index * 15))
+            .ToArray();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await LoadScheduleData();
+        }
+        catch (HttpRequestException)
+        {
+            errorMessage = "No se pudo conectar con la agenda local. Comprueba que el servidor esté iniciado.";
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            errorMessage = "El servidor devolvió datos que no se pudieron interpretar.";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task RefreshSchedule()
+    {
+        isRefreshing = true;
+        try
+        {
+            await LoadScheduleData();
+            errorMessage = null;
+        }
+        catch (HttpRequestException)
+        {
+            errorMessage = "No se pudo actualizar la agenda desde la base de datos local.";
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            errorMessage = "El servidor devolvió datos que no se pudieron interpretar.";
+        }
+        finally
+        {
+            isRefreshing = false;
+        }
+    }
+
+    private async Task LoadScheduleData()
+    {
+        var refreshedWorkers = await Http.GetFromJsonAsync<WorkerResponse[]>("api/workers") ?? [];
+        var refreshedServices = await Http.GetFromJsonAsync<ServiceResponse[]>("api/services") ?? [];
+        var refreshedHolidays = await Http.GetFromJsonAsync<HolidayResponse[]>("api/holidays") ?? [];
+        var refreshedSettings = await Http.GetFromJsonAsync<ScheduleSettingsResponse>("api/settings");
+        var refreshedAppointments = refreshedSettings is null ? [] : await FetchAppointments();
+
+        workers = refreshedWorkers;
+        services = refreshedServices;
+        holidays = refreshedHolidays;
+        settings = refreshedSettings;
+        appointments = refreshedAppointments;
+    }
+
+    private async Task LoadAppointments()
+    {
+        appointments = await FetchAppointments();
+    }
+
+    private async Task<AppointmentResponse[]> FetchAppointments()
+    {
+        var startDateTime = DateTime.SpecifyKind(WeekStart.ToDateTime(TimeOnly.MinValue), DateTimeKind.Local);
+        var endDateTime = DateTime.SpecifyKind(WeekStart.AddDays(7).ToDateTime(TimeOnly.MinValue), DateTimeKind.Local);
+        var start = Uri.EscapeDataString(new DateTimeOffset(startDateTime).ToString("O", CultureInfo.InvariantCulture));
+        var end = Uri.EscapeDataString(new DateTimeOffset(endDateTime).ToString("O", CultureInfo.InvariantCulture));
+        return await Http.GetFromJsonAsync<AppointmentResponse[]>($"api/appointments?start={start}&end={end}") ?? [];
+    }
+
+    private async Task NavigateTo(DateOnly date)
+    {
+        selectedDate = date;
+        ClearSelection();
+        try
+        {
+            await LoadAppointments();
+            errorMessage = null;
+        }
+        catch (HttpRequestException)
+        {
+            errorMessage = "No se pudieron cargar las citas de esa semana.";
+        }
+    }
+
+    private Task MoveWeek(int weeks) => NavigateTo(selectedDate.AddDays(weeks * 7));
+
+    private Task MoveMonth(int months)
+    {
+        var target = new DateOnly(selectedDate.Year, selectedDate.Month, 1).AddMonths(months);
+        return NavigateTo(target);
+    }
+
+    private Task GoToCurrentWeek() => NavigateTo(today);
+
+    private async Task HandleDateChange(ChangeEventArgs args)
+    {
+        if (DateOnly.TryParse(args.Value?.ToString(), CultureInfo.InvariantCulture, out var date))
+        {
+            await NavigateTo(date);
+        }
+    }
+
+    private AppointmentResponse[] AppointmentsFor(DateOnly day)
+        => appointments.Where(appointment => DateOnly.FromDateTime(appointment.StartsAt.LocalDateTime) == day).ToArray();
+
+    private HolidayResponse? FindHoliday(DateOnly day)
+        => holidays.FirstOrDefault(holiday => DateOnly.FromDateTime(holiday.Date.LocalDateTime) == day);
+
+    private double TimeOffset(TimeOnly time)
+        => (time.ToTimeSpan() - settings!.StartTime.ToTimeSpan()).TotalMinutes * PixelsPerMinute;
+
+    private static string EmptySlotLabel(DateOnly day, TimeOnly time, WorkerResponse worker)
+        => $"Doble clic para crear una cita el {day:dd/MM} a las {time.ToString("HH:mm", CultureInfo.InvariantCulture)} con {worker.Name}";
+
+    private void HandleEmptySlotClick(DateOnly day, TimeOnly time, int workerId, bool isSpecialDay)
+    {
+        if (isSpecialDay)
+        {
+            OpenNewAppointment(day, time, workerId);
+        }
+    }
+
+    private void HandleAppointmentClick(AppointmentResponse appointment, MouseEventArgs args)
+    {
+        if (args.ShiftKey)
+        {
+            if (!selectedAppointmentIds.Add(appointment.Id))
+            {
+                selectedAppointmentIds.Remove(appointment.Id);
+            }
+
+            selectionError = null;
+            return;
+        }
+
+        ClearSelection();
+        OpenEditAppointment(appointment);
+    }
+
+    private void ClearSelection()
+    {
+        selectedAppointmentIds.Clear();
+        selectionError = null;
+    }
+
+    private string EmptySlotStyle(WorkerResponse worker, TimeOnly time)
+    {
+        var workerIndex = Array.FindIndex(workers, candidate => candidate.Id == worker.Id);
+        var workerCount = Math.Max(1, workers.Length);
+        var left = Math.Max(0, workerIndex) * 100d / workerCount;
+        var width = 100d / workerCount;
+        return FormattableString.Invariant($"top:{TimeOffset(time):0.##}px;height:{15 * PixelsPerMinute:0.##}px;left:{left:0.##}%;width:{width:0.##}%");
+    }
+
+    private string AppointmentStyle(AppointmentResponse appointment)
+    {
+        var workerIndex = Array.FindIndex(workers, worker => worker.Id == appointment.WorkerId);
+        var workerCount = Math.Max(1, workers.Length);
+        var top = (appointment.StartsAt.LocalDateTime.TimeOfDay - settings!.StartTime.ToTimeSpan()).TotalMinutes * PixelsPerMinute;
+        var height = appointment.DurationMinutes * PixelsPerMinute;
+        var left = Math.Max(0, workerIndex) * 100d / workerCount;
+        var width = 100d / workerCount;
+        var color = workers.FirstOrDefault(worker => worker.Id == appointment.WorkerId)?.Color ?? "#13CBE8";
+        return FormattableString.Invariant($"top:{top:0.##}px;height:{height:0.##}px;left:calc({left:0.##}% + 2px);width:calc({width:0.##}% - 4px);--appointment-color:{color}");
+    }
+
+    private string WorkerName(int workerId)
+        => workers.FirstOrDefault(worker => worker.Id == workerId)?.Name ?? "Trabajador";
+
+    private void OpenNewAppointment()
+        => OpenNewAppointment(null, null, null);
+
+    private void OpenNewAppointment(DateOnly? date, TimeOnly? time, int? workerId)
+    {
+        editingId = null;
+        editorError = null;
+        var appointmentDate = date ?? selectedDate;
+        editorWarning = SpecialDayWarning(appointmentDate);
+        form = new AppointmentForm
+        {
+            StartsAt = appointmentDate.ToDateTime(time ?? settings!.StartTime),
+            WorkerId = workerId ?? workers.FirstOrDefault()?.Id ?? 1,
+            ServiceId = services.FirstOrDefault()?.Id ?? 1
+        };
+        isEditorOpen = true;
+    }
+
+    private void OpenEditAppointment(AppointmentResponse appointment)
+    {
+        editingId = appointment.Id;
+        editorError = null;
+        editorWarning = SpecialDayWarning(DateOnly.FromDateTime(appointment.StartsAt.LocalDateTime));
+        form = new AppointmentForm
+        {
+            CustomerName = appointment.CustomerName,
+            Phone = appointment.Phone,
+            WorkerId = appointment.WorkerId,
+            ServiceId = appointment.ServiceId,
+            StartsAt = appointment.StartsAt.LocalDateTime
+        };
+        isEditorOpen = true;
+    }
+
+    private void CloseEditor()
+    {
+        isEditorOpen = false;
+        editorError = null;
+        editorWarning = null;
+    }
+
+    private string? SpecialDayWarning(DateOnly date)
+    {
+        var holiday = FindHoliday(date);
+        if (holiday is not null)
+        {
+            return $"Aviso: {holiday.Name}. Puedes guardar esta cita; se mantienen los controles de horario y solapamientos.";
+        }
+
+        return date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday
+            ? "Aviso: esta fecha es fin de semana. Puedes guardar esta cita; se mantienen los controles de horario y solapamientos."
+            : null;
+    }
+
+    private void OpenMoveDialog()
+    {
+        var selected = appointments
+            .Where(appointment => selectedAppointmentIds.Contains(appointment.Id))
+            .ToArray();
+        if (selected.Length == 0)
+        {
+            ClearSelection();
+            return;
+        }
+
+        moveFirstAppointmentStartsAt = selected.MinBy(appointment => appointment.StartsAt)?.StartsAt.LocalDateTime
+            ?? DateTime.Today.AddHours(9);
+        selectionError = null;
+        isMoveDialogOpen = true;
+    }
+
+    private void CloseMoveDialog()
+    {
+        isMoveDialogOpen = false;
+        selectionError = null;
+    }
+
+    private async Task MoveSelectedAppointments()
+    {
+        if (selectedAppointmentIds.Count == 0)
+        {
+            CloseMoveDialog();
+            return;
+        }
+
+        isBulkSaving = true;
+        selectionError = null;
+        try
+        {
+            var response = await Http.PostAsJsonAsync("api/appointments/move", new MoveAppointmentsRequest
+            {
+                AppointmentIds = selectedAppointmentIds.ToArray(),
+                FirstAppointmentStartsAt = new DateTimeOffset(DateTime.SpecifyKind(moveFirstAppointmentStartsAt, DateTimeKind.Local))
+            });
+            if (!response.IsSuccessStatusCode)
+            {
+                selectionError = await ApiErrorReader.ReadAsync(response);
+                return;
+            }
+
+            isMoveDialogOpen = false;
+            selectedDate = DateOnly.FromDateTime(moveFirstAppointmentStartsAt);
+            ClearSelection();
+            await LoadAppointments();
+        }
+        catch (HttpRequestException)
+        {
+            selectionError = "No se pudieron mover las citas seleccionadas.";
+        }
+        finally
+        {
+            isBulkSaving = false;
+        }
+    }
+
+    private async Task DeleteSelectedAppointments()
+    {
+        if (selectedAppointmentIds.Count == 0 ||
+            !await JavaScript.InvokeAsync<bool>("confirm", $"¿Quieres eliminar las {selectedAppointmentIds.Count} citas seleccionadas?"))
+        {
+            return;
+        }
+
+        isBulkSaving = true;
+        selectionError = null;
+        try
+        {
+            var response = await Http.PostAsJsonAsync("api/appointments/bulk-delete", new DeleteAppointmentsRequest
+            {
+                AppointmentIds = selectedAppointmentIds.ToArray()
+            });
+            if (!response.IsSuccessStatusCode)
+            {
+                selectionError = await ApiErrorReader.ReadAsync(response);
+                return;
+            }
+
+            ClearSelection();
+            await LoadAppointments();
+        }
+        catch (HttpRequestException)
+        {
+            selectionError = "No se pudieron eliminar las citas seleccionadas.";
+        }
+        finally
+        {
+            isBulkSaving = false;
+        }
+    }
+
+    private async Task SaveAppointment()
+    {
+        isSaving = true;
+        editorError = null;
+        try
+        {
+            var startsAt = new DateTimeOffset(DateTime.SpecifyKind(form.StartsAt, DateTimeKind.Local));
+            HttpResponseMessage response;
+            if (editingId is { } id)
+            {
+                response = await Http.PutAsJsonAsync($"api/appointments/{id}", new UpdateAppointmentRequest
+                {
+                    CustomerName = form.CustomerName,
+                    Phone = form.Phone,
+                    WorkerId = form.WorkerId,
+                    ServiceId = form.ServiceId,
+                    StartsAt = startsAt
+                });
+            }
+            else
+            {
+                response = await Http.PostAsJsonAsync("api/appointments", new CreateAppointmentRequest
+                {
+                    CustomerName = form.CustomerName,
+                    Phone = form.Phone,
+                    WorkerId = form.WorkerId,
+                    ServiceId = form.ServiceId,
+                    StartsAt = startsAt
+                });
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                editorError = await ApiErrorReader.ReadAsync(response);
+                return;
+            }
+
+            CloseEditor();
+            await LoadAppointments();
+        }
+        catch (HttpRequestException)
+        {
+            editorError = "No se pudo guardar la cita. Comprueba la conexión con la agenda.";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private async Task DeleteAppointment()
+    {
+        if (editingId is not { } id || !await JavaScript.InvokeAsync<bool>("confirm", "¿Quieres eliminar esta cita?"))
+        {
+            return;
+        }
+
+        isSaving = true;
+        editorError = null;
+        try
+        {
+            var response = await Http.DeleteAsync($"api/appointments/{id}");
+            if (!response.IsSuccessStatusCode)
+            {
+                editorError = await ApiErrorReader.ReadAsync(response);
+                return;
+            }
+
+            CloseEditor();
+            await LoadAppointments();
+        }
+        catch (HttpRequestException)
+        {
+            editorError = "No se pudo eliminar la cita. Comprueba la conexión con la agenda.";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private sealed class AppointmentForm
+    {
+        [Required(ErrorMessage = "Escribe el nombre del cliente.")]
+        [StringLength(100, ErrorMessage = "El nombre no puede superar los 100 caracteres.")]
+        public string CustomerName { get; set; } = "";
+
+        [Required(ErrorMessage = "Escribe el teléfono.")]
+        [RegularExpression(@"^(?:\d{9}|\d{12})$", ErrorMessage = "Usa 9 dígitos nacionales o 12 con prefijo internacional.")]
+        public string Phone { get; set; } = "";
+
+        [Range(1, int.MaxValue)]
+        public int WorkerId { get; set; }
+
+        [Range(1, int.MaxValue)]
+        public int ServiceId { get; set; }
+
+        public DateTime StartsAt { get; set; } = DateTime.Now;
+    }
+}

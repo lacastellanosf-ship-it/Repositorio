@@ -1,0 +1,67 @@
+name: Publish Citaspp to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish standalone WebAssembly client
+        run: dotnet publish Citaspp.Web/Citaspp.Web.Client/Citaspp.Web.Client.csproj --configuration Release --property:CitasppStandalone=true --output ./publish
+
+      - name: Prepare Pages site
+        shell: bash
+        run: |
+          mkdir -p ./_site/bootstrap
+          cp -a ./publish/wwwroot/. ./_site/
+          cp Citaspp.Web/Citaspp.Web/wwwroot/app.css ./_site/app.css
+          cp Citaspp.Web/Citaspp.Web/wwwroot/bootstrap/bootstrap.min.css ./_site/bootstrap/bootstrap.min.css
+          cp Citaspp.Web/Citaspp.Web/wwwroot/favicon.svg ./_site/favicon.svg
+          cp ./_site/standalone-index.html ./_site/index.html
+          repository="${GITHUB_REPOSITORY#*/}"
+          if [[ "$repository" == *.github.io ]]; then
+            base_path="/"
+          else
+            base_path="/${repository}/"
+          fi
+          sed "s|__CITASPP_BASE_PATH__|${base_path}|g" ./_site/standalone-404.html > ./_site/404.html
+          touch ./_site/.nojekyll
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./_site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

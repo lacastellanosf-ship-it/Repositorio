@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Citas | Redirigiendo</title>
+    <script>
+        (() => {
+            const basePath = "__CITASPP_BASE_PATH__";
+            const base = new URL(basePath, location.origin);
+            const path = location.pathname.startsWith(base.pathname)
+                ? location.pathname.slice(base.pathname.length)
+                : "";
+            const route = `/${path}${location.search}${location.hash}`;
+            base.searchParams.set("__citaspp_route", route);
+            location.replace(base.href);
+        })();
+    </script>
+</head>
+<body></body>
+</html>

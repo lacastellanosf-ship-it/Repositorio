@@ -1,0 +1,803 @@
+@page "/configuracion"
+@using System.Globalization
+@using System.Text
+@using Microsoft.AspNetCore.Components.Forms
+@inject HttpClient Http
+@inject NavigationManager Navigation
+
+<PageTitle>Citas | Configuración</PageTitle>
+
+<main class="app-shell">
+    <header class="topbar">
+        <a class="brand" href="./" aria-label="Citas, agenda">
+            <span class="brand-mark">C</span>
+            <span>CITAS<span class="brand-dot">.</span></span>
+        </a>
+        <a class="header-action" href="./">← Agenda</a>
+    </header>
+
+    <section class="welcome-row">
+        <div>
+            <p class="eyebrow">AJUSTES DE LA AGENDA</p>
+            <h1>Configuración</h1>
+            <p class="welcome-copy">Define la jornada, el equipo, los servicios y los festivos.</p>
+        </div>
+        <button type="button" class="primary-button" disabled="@isSaving" @onclick="SaveConfiguration">
+            @(isSaving ? "Guardando..." : "Guardar configuración")
+        </button>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(configurationError))
+    {
+        <div class="notice error-notice" role="alert">@configurationError</div>
+    }
+    @if (!string.IsNullOrWhiteSpace(configurationSuccess))
+    {
+        <div class="notice success-notice" role="status">@configurationSuccess</div>
+    }
+
+    @if (isLoading)
+    {
+        <section class="loading-panel" aria-live="polite">
+            <span class="loader"></span>
+            <span>Cargando configuración...</span>
+        </section>
+    }
+    else
+    {
+        <section class="settings-panel">
+            <nav class="settings-tabs" aria-label="Secciones de configuración">
+                <button type="button" class="settings-tab @(activeTab == "schedule" ? "selected" : "")" @onclick='() => activeTab = "schedule"'>Jornada</button>
+                <button type="button" class="settings-tab @(activeTab == "workers" ? "selected" : "")" @onclick='() => activeTab = "workers"'>Trabajadores</button>
+                <button type="button" class="settings-tab @(activeTab == "services" ? "selected" : "")" @onclick='() => activeTab = "services"'>Servicios</button>
+                <button type="button" class="settings-tab @(activeTab == "holidays" ? "selected" : "")" @onclick='() => activeTab = "holidays"'>Festivos</button>
+            </nav>
+
+            @if (activeTab == "schedule")
+            {
+                <section class="settings-content">
+                    <div class="settings-section-heading">
+                        <h2>Jornada laboral</h2>
+                        <p>Horario y días en los que se pueden reservar citas.</p>
+                    </div>
+                    <div class="settings-fields settings-hours">
+                        <label class="form-field">
+                            <span>Hora de inicio</span>
+                            <InputDate @bind-Value="startTime" Type="InputDateType.Time" />
+                        </label>
+                        <label class="form-field">
+                            <span>Hora de fin</span>
+                            <InputDate @bind-Value="endTime" Type="InputDateType.Time" />
+                        </label>
+                        <label class="form-field">
+                            <span>Número de trabajadores</span>
+                            <InputNumber @bind-Value="workerCount" min="1" max="20" />
+                        </label>
+                    </div>
+                    <fieldset class="workday-fieldset">
+                        <legend>Días laborables</legend>
+                        <div class="workday-options">
+                            @foreach (var (value, label) in DayOptions)
+                            {
+                                <label class="workday-option">
+                                    <input type="checkbox" checked="@selectedDays.Contains(value)" @onchange="args => SetWorkDay(value, args)" />
+                                    <span>@label</span>
+                                </label>
+                            }
+                        </div>
+                    </fieldset>
+                </section>
+            }
+            else if (activeTab == "workers")
+            {
+                <section class="settings-content">
+                    <div class="settings-section-heading">
+                        <h2>Trabajadores</h2>
+                        <p>Edita los nombres y los colores que identifican cada agenda.</p>
+                    </div>
+                    <div class="settings-list">
+                        @foreach (var worker in workerSettings)
+                        {
+                            <article class="settings-row worker-settings-row">
+                                <label class="form-field">
+                                    <span>Nombre</span>
+                                    <input value="@worker.Name" maxlength="100" @oninput="args => worker.Name = args.Value?.ToString() ?? string.Empty" />
+                                </label>
+                                <div class="form-field worker-color-field">
+                                    <span>Color de agenda</span>
+                                    <div class="worker-color-picker" role="group" aria-label="Colores para @worker.Name">
+                                        @if (!WorkerColorOptions.Any(option =>
+                                            string.Equals(option.Hex, worker.Color, StringComparison.OrdinalIgnoreCase)))
+                                        {
+                                            <button type="button"
+                                                    class="worker-color-swatch is-selected"
+                                                    style="--swatch-color:@worker.Color"
+                                                    aria-label="Color actual"
+                                                    aria-pressed="true"
+                                                    title="Color actual"
+                                                    @onclick="() => SetWorkerColor(worker, worker.Color)">
+                                            </button>
+                                        }
+                                        @foreach (var color in WorkerColorOptions)
+                                        {
+                                            var isSelected = string.Equals(color.Hex, worker.Color, StringComparison.OrdinalIgnoreCase);
+                                            <button type="button"
+                                                    class="worker-color-swatch @(isSelected ? "is-selected" : string.Empty)"
+                                                    style="--swatch-color:@color.Hex"
+                                                    aria-label="@color.Name"
+                                                    aria-pressed="@isSelected"
+                                                    title="@color.Name"
+                                                    @onclick="() => SetWorkerColor(worker, color.Hex)">
+                                            </button>
+                                        }
+                                    </div>
+                                </div>
+                            </article>
+                        }
+                    </div>
+                </section>
+            }
+            else if (activeTab == "services")
+            {
+                <section class="settings-content">
+                    <div class="settings-section-heading settings-heading-with-action">
+                        <div>
+                            <h2>Servicios</h2>
+                            <p>La duración debe ser de 15 a 480 minutos, en intervalos de 15.</p>
+                        </div>
+                        <button type="button" class="outline-button" @onclick="AddService">Añadir servicio</button>
+                    </div>
+                    <div class="settings-list">
+                        @foreach (var service in serviceSettings)
+                        {
+                            <article class="settings-row service-settings-row">
+                                <label class="form-field">
+                                    <span>Nombre</span>
+                                    <input value="@service.Name" maxlength="100" @oninput="args => service.Name = args.Value?.ToString() ?? string.Empty" />
+                                </label>
+                                <label class="form-field">
+                                    <span>Duración (min)</span>
+                                    <InputNumber @bind-Value="service.DurationMinutes" min="15" max="480" step="15" />
+                                </label>
+                                <button type="button" class="danger-button row-delete" aria-label="@($"Eliminar {service.Name}")" @onclick="() => serviceSettings.Remove(service)">Eliminar</button>
+                            </article>
+                        }
+                    </div>
+                </section>
+            }
+            else
+            {
+                <section class="settings-content">
+                    <div class="settings-section-heading settings-heading-with-action">
+                        <div>
+                            <h2>Festivos</h2>
+                            <p>Los festivos y fines de semana se marcan en rojo tenue. Se pueden reservar citas y la agenda mostrará un aviso.</p>
+                        </div>
+                        <div class="holiday-heading-actions">
+                            <button type="button" class="outline-button" @onclick="AddHoliday">Añadir festivo</button>
+                            <label class="outline-button file-upload-button" for="holiday-import-file">Importar CSV</label>
+                            <InputFile id="holiday-import-file" class="visually-hidden-file-input" OnChange="ImportHolidays" accept=".csv,text/csv" />
+                        </div>
+                    </div>
+                    <div class="holiday-import-help">
+                        <p>Archivo <strong>CSV UTF-8</strong> con dos columnas: fecha y nombre. Se admite coma o punto y coma, con cabecera opcional. Fechas: <code>AAAA-MM-DD</code> o <code>DD/MM/AAAA</code>.</p>
+                        <code>fecha,nombre<br />2026-01-01,Año Nuevo<br />2026-01-06,Epifanía del Señor</code>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(holidayImportMessage))
+                    {
+                        <p class="holiday-import-status @(holidayImportIsError ? "import-error" : "")" role="@(holidayImportIsError ? "alert" : "status")">@holidayImportMessage</p>
+                    }
+                    @if (selectedHolidays.Count > 0)
+                    {
+                        <div class="holiday-selection-toolbar">
+                            <span>@selectedHolidays.Count festivo(s) seleccionado(s)</span>
+                            <button type="button" class="danger-button" @onclick="DeleteSelectedHolidays">Eliminar selección</button>
+                        </div>
+                    }
+                    <div class="holiday-year-list">
+                        @foreach (var yearGroup in holidaySettings.OrderByDescending(holiday => holiday.Date).GroupBy(holiday => holiday.Date.Year))
+                        {
+                            <section class="holiday-year-group">
+                                <header class="holiday-year-heading">
+                                    <label class="workday-option">
+                                        <input type="checkbox"
+                                               checked="@IsHolidayYearSelected(yearGroup.Key)"
+                                               @onchange="args => ToggleHolidayYear(yearGroup.Key, args)" />
+                                        <strong>@yearGroup.Key</strong>
+                                    </label>
+                                    <span>@yearGroup.Count() festivo(s)</span>
+                                </header>
+                                <div class="settings-list">
+                                    @foreach (var holiday in yearGroup.OrderBy(item => item.Date))
+                                    {
+                                        <article class="settings-row holiday-settings-row">
+                                            <label class="holiday-row-selection" aria-label="@($"Seleccionar festivo {holiday.Name}")">
+                                                <input type="checkbox"
+                                                       checked="@selectedHolidays.Contains(holiday)"
+                                                       @onchange="args => SetHolidaySelected(holiday, args)" />
+                                            </label>
+                                            <label class="form-field">
+                                                <span>Fecha</span>
+                                                <input type="date" value="@holiday.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)" @onchange="args => SetHolidayDate(holiday, args)" />
+                                            </label>
+                                            <label class="form-field">
+                                                <span>Nombre</span>
+                                                <input value="@holiday.Name" maxlength="100" @oninput="args => holiday.Name = args.Value?.ToString() ?? string.Empty" />
+                                            </label>
+                                        </article>
+                                    }
+                                </div>
+                            </section>
+                        }
+                        @if (holidaySettings.Count == 0)
+                        {
+                            <p class="empty-settings">No hay festivos configurados.</p>
+                        }
+                    </div>
+                </section>
+            }
+
+            <footer class="settings-footer">
+                <span>Los cambios se aplican al guardar.</span>
+                <button type="button" class="primary-button" disabled="@isSaving" @onclick="SaveConfiguration">
+                    @(isSaving ? "Guardando..." : "Guardar configuración")
+                </button>
+            </footer>
+        </section>
+    }
+</main>
+
+@code {
+    private static readonly (string Value, string Label)[] DayOptions =
+    [
+        ("Monday", "Lunes"),
+        ("Tuesday", "Martes"),
+        ("Wednesday", "Miércoles"),
+        ("Thursday", "Jueves"),
+        ("Friday", "Viernes"),
+        ("Saturday", "Sábado"),
+        ("Sunday", "Domingo")
+    ];
+
+    private static readonly (string Name, string Hex)[] WorkerColorOptions =
+    [
+        ("Turquesa", "#13CBE8"),
+        ("Naranja", "#FF9718"),
+        ("Lima", "#C9DE17"),
+        ("Violeta", "#9346E2"),
+        ("Rosa", "#E83C7D"),
+        ("Azul", "#3D7EFF"),
+        ("Verde", "#29B36B"),
+        ("Coral", "#F05D5E"),
+        ("Cielo", "#55A7E8"),
+        ("Lavanda", "#B78BFA"),
+        ("Mostaza", "#D4A72C"),
+        ("Verde agua", "#21A69A")
+    ];
+
+    private string activeTab = "schedule";
+    private DateTime startTime = DateTime.Today.AddHours(9);
+    private DateTime endTime = DateTime.Today.AddHours(17);
+    private int workerCount = 1;
+    private string[] selectedDays = [];
+    private List<WorkerEditModel> workerSettings = [];
+    private List<ServiceEditModel> serviceSettings = [];
+    private List<HolidayEditModel> holidaySettings = [];
+    private HashSet<HolidayEditModel> selectedHolidays = [];
+    private HashSet<int> originalServiceIds = [];
+    private HashSet<DateOnly> originalHolidayDates = [];
+    private bool isLoading = true;
+    private bool isSaving;
+    private string? holidayImportMessage;
+    private bool holidayImportIsError;
+    private string? configurationError;
+    private string? configurationSuccess;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await LoadConfiguration();
+        }
+        catch (HttpRequestException)
+        {
+            configurationError = "No se pudo cargar la configuración. Comprueba que el servidor esté iniciado.";
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            configurationError = "El servidor devolvió datos que no se pudieron interpretar.";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task LoadConfiguration()
+    {
+        var savedSettings = await Http.GetFromJsonAsync<ScheduleSettingsResponse>("api/settings")
+            ?? throw new InvalidOperationException("No se recibió la configuración de jornada.");
+        var savedWorkers = await Http.GetFromJsonAsync<WorkerResponse[]>("api/workers") ?? [];
+        var savedServices = await Http.GetFromJsonAsync<ServiceResponse[]>("api/services") ?? [];
+        var savedHolidays = await Http.GetFromJsonAsync<HolidayResponse[]>("api/holidays") ?? [];
+
+        startTime = DateTime.Today.Add(savedSettings.StartTime.ToTimeSpan());
+        endTime = DateTime.Today.Add(savedSettings.EndTime.ToTimeSpan());
+        workerCount = savedSettings.WorkerCount;
+        selectedDays = savedSettings.WorkDays;
+        workerSettings = savedWorkers
+            .Select(worker => new WorkerEditModel(worker.Id, worker.Name, worker.Color))
+            .ToList();
+        serviceSettings = savedServices
+            .Select(service => new ServiceEditModel(service.Id, service.Name, service.DurationMinutes))
+            .ToList();
+        holidaySettings = savedHolidays
+            .Select(holiday => new HolidayEditModel(
+                DateOnly.FromDateTime(holiday.Date.LocalDateTime),
+                holiday.Name))
+            .ToList();
+        originalServiceIds = savedServices.Select(service => service.Id).ToHashSet();
+        originalHolidayDates = holidaySettings.Select(holiday => holiday.Date).ToHashSet();
+        selectedHolidays.Clear();
+    }
+
+    private void SetWorkDay(string day, ChangeEventArgs args)
+    {
+        if (bool.TryParse(args.Value?.ToString(), out var isSelected) && isSelected)
+        {
+            if (!selectedDays.Contains(day, StringComparer.Ordinal))
+            {
+                selectedDays = [.. selectedDays, day];
+            }
+        }
+        else
+        {
+            selectedDays = selectedDays.Where(value => value != day).ToArray();
+        }
+    }
+
+    private static void SetWorkerColor(WorkerEditModel worker, string color)
+    {
+        worker.Color = color;
+        worker.ColorChanged = true;
+    }
+
+    private static void SetHolidayDate(HolidayEditModel holiday, ChangeEventArgs args)
+    {
+        if (DateOnly.TryParse(args.Value?.ToString(), CultureInfo.InvariantCulture, out var date))
+        {
+            holiday.Date = date;
+        }
+    }
+
+    private void AddService()
+        => serviceSettings.Add(new ServiceEditModel(null, string.Empty, 30));
+
+    private void AddHoliday()
+        => holidaySettings.Add(new HolidayEditModel(DateOnly.FromDateTime(DateTime.Today), string.Empty));
+
+    private bool IsHolidayYearSelected(int year)
+    {
+        var yearHolidays = holidaySettings.Where(holiday => holiday.Date.Year == year).ToArray();
+        return yearHolidays.Length > 0 && yearHolidays.All(selectedHolidays.Contains);
+    }
+
+    private void ToggleHolidayYear(int year, ChangeEventArgs args)
+    {
+        var select = bool.TryParse(args.Value?.ToString(), out var value) && value;
+        foreach (var holiday in holidaySettings.Where(holiday => holiday.Date.Year == year))
+        {
+            if (select)
+            {
+                selectedHolidays.Add(holiday);
+            }
+            else
+            {
+                selectedHolidays.Remove(holiday);
+            }
+        }
+    }
+
+    private void SetHolidaySelected(HolidayEditModel holiday, ChangeEventArgs args)
+    {
+        if (bool.TryParse(args.Value?.ToString(), out var selected) && selected)
+        {
+            selectedHolidays.Add(holiday);
+        }
+        else
+        {
+            selectedHolidays.Remove(holiday);
+        }
+    }
+
+    private void DeleteSelectedHolidays()
+    {
+        foreach (var holiday in selectedHolidays)
+        {
+            holidaySettings.Remove(holiday);
+        }
+
+        var count = selectedHolidays.Count;
+        selectedHolidays.Clear();
+        holidayImportMessage = $"{count} festivo(s) eliminado(s) de la lista. Pulsa «Guardar configuración» para aplicar los cambios.";
+    }
+
+    private async Task ImportHolidays(InputFileChangeEventArgs args)
+    {
+        holidayImportMessage = null;
+        holidayImportIsError = false;
+        configurationError = null;
+        var file = args.File;
+        if (!string.Equals(Path.GetExtension(file.Name), ".csv", StringComparison.OrdinalIgnoreCase))
+        {
+            holidayImportMessage = "Selecciona un archivo con extensión .csv.";
+            holidayImportIsError = true;
+            return;
+        }
+
+        try
+        {
+            using var stream = file.OpenReadStream(maxAllowedSize: 1_048_576);
+            using var reader = new StreamReader(stream, new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: true);
+            var imported = ParseHolidayCsv(await reader.ReadToEndAsync());
+            var existingDates = holidaySettings.Select(holiday => holiday.Date).ToHashSet();
+            var updated = 0;
+            foreach (var holiday in imported)
+            {
+                var existing = holidaySettings.FirstOrDefault(item => item.Date == holiday.Date);
+                if (existing is null)
+                {
+                    holidaySettings.Add(holiday);
+                }
+                else
+                {
+                    existing.Name = holiday.Name;
+                    updated++;
+                }
+            }
+
+            selectedHolidays.Clear();
+            var added = imported.Count(holiday => !existingDates.Contains(holiday.Date));
+            holidayImportMessage = $"Importación preparada: {added} festivo(s) nuevo(s) y {updated} fecha(s) actualizada(s). Pulsa «Guardar configuración» para aplicar los cambios.";
+        }
+        catch (FormatException exception)
+        {
+            holidayImportMessage = exception.Message;
+            holidayImportIsError = true;
+        }
+        catch (DecoderFallbackException)
+        {
+            holidayImportMessage = "El archivo no está codificado en UTF-8.";
+            holidayImportIsError = true;
+        }
+        catch (IOException)
+        {
+            holidayImportMessage = "No se pudo leer el archivo seleccionado.";
+            holidayImportIsError = true;
+        }
+        catch (InvalidOperationException)
+        {
+            holidayImportMessage = "El archivo supera el límite de 1 MB.";
+            holidayImportIsError = true;
+        }
+    }
+
+    private static List<HolidayEditModel> ParseHolidayCsv(string contents)
+    {
+        var lines = contents.TrimStart('\uFEFF')
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+        var firstLine = lines.FirstOrDefault(line => !string.IsNullOrWhiteSpace(line));
+        if (firstLine is null)
+        {
+            throw new FormatException("El archivo CSV está vacío.");
+        }
+
+        var delimiter = firstLine.Count(character => character == ';') > firstLine.Count(character => character == ',')
+            ? ';'
+            : ',';
+        var holidays = new List<HolidayEditModel>();
+        var dates = new HashSet<DateOnly>();
+        var firstRecord = true;
+        var lineNumber = 0;
+        foreach (var line in lines)
+        {
+            lineNumber++;
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            var fields = ParseCsvLine(line, delimiter);
+            if (firstRecord &&
+                fields.Count == 2 &&
+                (string.Equals(fields[0].Trim(), "fecha", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(fields[0].Trim(), "date", StringComparison.OrdinalIgnoreCase)))
+            {
+                firstRecord = false;
+                continue;
+            }
+
+            firstRecord = false;
+            if (fields.Count != 2)
+            {
+                throw new FormatException($"La línea {lineNumber} debe tener dos columnas: fecha y festivo.");
+            }
+
+            if (!DateOnly.TryParseExact(fields[0].Trim(), ["yyyy-MM-dd", "dd/MM/yyyy"], CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+            {
+                throw new FormatException($"La fecha de la línea {lineNumber} no es válida. Usa AAAA-MM-DD o DD/MM/AAAA.");
+            }
+
+            var name = fields[1].Trim();
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                throw new FormatException($"Falta el nombre del festivo en la línea {lineNumber}.");
+            }
+
+            if (!dates.Add(date))
+            {
+                throw new FormatException($"La fecha {date:dd/MM/yyyy} aparece más de una vez en el archivo.");
+            }
+
+            holidays.Add(new HolidayEditModel(date, name));
+        }
+
+        if (holidays.Count == 0)
+        {
+            throw new FormatException("El archivo no contiene filas de festivos.");
+        }
+
+        return holidays;
+    }
+
+    private static List<string> ParseCsvLine(string line, char delimiter)
+    {
+        var fields = new List<string>();
+        var field = new StringBuilder();
+        var inQuotes = false;
+        for (var index = 0; index < line.Length; index++)
+        {
+            var character = line[index];
+            if (character == '"')
+            {
+                if (inQuotes && index + 1 < line.Length && line[index + 1] == '"')
+                {
+                    field.Append('"');
+                    index++;
+                }
+                else
+                {
+                    inQuotes = !inQuotes;
+                }
+            }
+            else if (character == delimiter && !inQuotes)
+            {
+                fields.Add(field.ToString());
+                field.Clear();
+            }
+            else
+            {
+                field.Append(character);
+            }
+        }
+
+        if (inQuotes)
+        {
+            throw new FormatException("Hay comillas sin cerrar en una fila del archivo CSV.");
+        }
+
+        fields.Add(field.ToString());
+        return fields;
+    }
+
+    private async Task SaveConfiguration()
+    {
+        configurationError = null;
+        configurationSuccess = null;
+        if (!ValidateConfiguration())
+        {
+            return;
+        }
+
+        isSaving = true;
+        try
+        {
+            var scheduleRequest = new UpdateScheduleSettingsRequest
+            {
+                StartTime = TimeOnly.FromDateTime(startTime),
+                EndTime = TimeOnly.FromDateTime(endTime),
+                WorkDays = selectedDays,
+                WorkerCount = workerCount
+            };
+            if (!await SendAsync(Http.PutAsJsonAsync("api/settings", scheduleRequest)))
+            {
+                return;
+            }
+
+            foreach (var worker in workerSettings.Where(worker => worker.Id <= workerCount))
+            {
+                var request = new UpdateWorkerRequest
+                {
+                    Name = worker.Name.Trim(),
+                    Color = worker.ColorChanged ? worker.Color.Trim() : null
+                };
+                if (!await SendAsync(Http.PutAsJsonAsync($"api/workers/{worker.Id}", request)))
+                {
+                    return;
+                }
+            }
+
+            var currentServiceIds = serviceSettings
+                .Where(service => service.Id.HasValue)
+                .Select(service => service.Id!.Value)
+                .ToHashSet();
+            foreach (var removedId in originalServiceIds.Except(currentServiceIds))
+            {
+                if (!await SendAsync(Http.DeleteAsync($"api/services/{removedId}")))
+                {
+                    return;
+                }
+            }
+
+            foreach (var service in serviceSettings)
+            {
+                var request = new SaveServiceRequest
+                {
+                    Name = service.Name.Trim(),
+                    DurationMinutes = service.DurationMinutes
+                };
+                var operation = service.Id is { } id
+                    ? Http.PutAsJsonAsync($"api/services/{id}", request)
+                    : Http.PostAsJsonAsync("api/services", request);
+                if (!await SendAsync(operation))
+                {
+                    return;
+                }
+            }
+
+            foreach (var holiday in holidaySettings)
+            {
+                var request = new SaveHolidayRequest { Name = holiday.Name.Trim() };
+                if (!await SendAsync(Http.PutAsJsonAsync(
+                        $"api/holidays/{holiday.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}",
+                        request)))
+                {
+                    return;
+                }
+            }
+
+            var currentHolidayDates = holidaySettings.Select(holiday => holiday.Date).ToHashSet();
+            foreach (var removedDate in originalHolidayDates.Except(currentHolidayDates))
+            {
+                var date = removedDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                if (!await SendAsync(Http.DeleteAsync($"api/holidays/{date}")))
+                {
+                    return;
+                }
+            }
+
+            await LoadConfiguration();
+            configurationSuccess = "Configuración guardada correctamente.";
+            holidayImportMessage = null;
+        }
+        catch (HttpRequestException)
+        {
+            configurationError = "No se pudo completar la operación. Algunos cambios anteriores pueden haberse guardado; vuelve a cargar la configuración antes de reintentar.";
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            configurationError = "El servidor devolvió una respuesta que no se pudo interpretar.";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private bool ValidateConfiguration()
+    {
+        if (TimeOnly.FromDateTime(startTime) >= TimeOnly.FromDateTime(endTime))
+        {
+            configurationError = "La hora de inicio debe ser anterior a la hora de fin.";
+            return false;
+        }
+
+        if (selectedDays.Length == 0)
+        {
+            configurationError = "Selecciona al menos un día laborable.";
+            return false;
+        }
+
+        if (workerSettings.Where(worker => worker.Id <= workerCount).Any(worker => string.IsNullOrWhiteSpace(worker.Name)))
+        {
+            configurationError = "Escribe el nombre de cada trabajador.";
+            return false;
+        }
+
+        var activeWorkerNames = workerSettings
+            .Where(worker => worker.Id <= workerCount)
+            .Select(worker => worker.Name.Trim());
+        if (activeWorkerNames.Distinct(StringComparer.OrdinalIgnoreCase).Count() != activeWorkerNames.Count())
+        {
+            configurationError = "No puede haber trabajadores con el mismo nombre.";
+            return false;
+        }
+
+        if (workerSettings.Any(worker => worker.ColorChanged &&
+            (worker.Color.Length != 7 || worker.Color[0] != '#' || worker.Color.Skip(1).Any(character => !Uri.IsHexDigit(character)))))
+        {
+            configurationError = "Los colores deben tener el formato hexadecimal #RRGGBB.";
+            return false;
+        }
+
+        if (serviceSettings.Count == 0)
+        {
+            configurationError = "Debe existir al menos un servicio.";
+            return false;
+        }
+
+        if (serviceSettings.Any(service =>
+                string.IsNullOrWhiteSpace(service.Name) ||
+                service.DurationMinutes < 15 ||
+                service.DurationMinutes > 480 ||
+                service.DurationMinutes % 15 != 0))
+        {
+            configurationError = "Cada servicio necesita nombre y duración entre 15 y 480 minutos, en múltiplos de 15.";
+            return false;
+        }
+
+        var serviceNames = serviceSettings.Select(service => service.Name.Trim());
+        if (serviceNames.Distinct(StringComparer.OrdinalIgnoreCase).Count() != serviceNames.Count())
+        {
+            configurationError = "No puede haber servicios con el mismo nombre.";
+            return false;
+        }
+
+        if (holidaySettings.Any(holiday => string.IsNullOrWhiteSpace(holiday.Name)))
+        {
+            configurationError = "Escribe el nombre de cada festivo.";
+            return false;
+        }
+
+        if (holidaySettings.Select(holiday => holiday.Date).Distinct().Count() != holidaySettings.Count)
+        {
+            configurationError = "No puede haber festivos duplicados en una misma fecha.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private async Task<bool> SendAsync(Task<HttpResponseMessage> request)
+    {
+        using var response = await request;
+        if (response.IsSuccessStatusCode)
+        {
+            return true;
+        }
+
+        configurationError = await ApiErrorReader.ReadAsync(response);
+        return false;
+    }
+
+    private sealed class WorkerEditModel(int id, string name, string color)
+    {
+        public int Id { get; } = id;
+        public string Name { get; set; } = name;
+        public string Color { get; set; } = color;
+        public bool ColorChanged { get; set; }
+    }
+
+    private sealed class ServiceEditModel(int? id, string name, int durationMinutes)
+    {
+        public int? Id { get; } = id;
+        public string Name { get; set; } = name;
+        public int DurationMinutes { get; set; } = durationMinutes;
+    }
+
+    private sealed class HolidayEditModel(DateOnly date, string name)
+    {
+        public DateOnly Date { get; set; } = date;
+        public string Name { get; set; } = name;
+    }
+}
