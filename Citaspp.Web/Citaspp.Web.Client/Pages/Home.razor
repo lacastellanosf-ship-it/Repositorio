@@ -15,7 +15,7 @@
             <span>CITAS<span class="brand-dot">.</span></span>
         </a>
         <div class="topbar-actions">
-            <div class="topbar-status"><span class="status-dot"></span> @(Firebase.IsConfigured ? "Citas en la nube" : "Agenda local")</div>
+            <div class="topbar-status"><span class="status-dot"></span> @(Firebase.IsConfigured ? "Agenda sincronizada" : "Agenda local")</div>
             <button type="button" class="header-action sync-button" title="@(Firebase.IsConfigured ? "Actualizar citas desde Firestore" : "Volver a cargar los datos guardados en este dispositivo")" disabled="@isRefreshing" @onclick="RefreshSchedule">
                 <span class="sync-icon @(isRefreshing ? "syncing" : "")">↻</span>
                 <span>Actualizar</span>
@@ -324,6 +324,7 @@
     private string? selectionError;
     private DotNetObjectReference<Home>? firebaseCallback;
     private int? firebaseSubscriptionId;
+    private int? firebaseConfigurationSubscriptionId;
 
     private DateOnly WeekStart => selectedDate.AddDays(-(((int)selectedDate.DayOfWeek + 6) % 7));
     private DateOnly[] WeekDays => Enumerable.Range(0, 7).Select(offset => WeekStart.AddDays(offset)).ToArray();
@@ -344,6 +345,7 @@
         try
         {
             await LoadScheduleData();
+            await SubscribeConfigurationAsync();
             await SubscribeAppointmentsToWeekAsync();
         }
         catch (HttpRequestException)
@@ -381,6 +383,11 @@
         if (firebaseSubscriptionId is { } subscriptionId)
         {
             await Firebase.UnsubscribeAppointmentsAsync(subscriptionId);
+        }
+
+        if (firebaseConfigurationSubscriptionId is { } configurationSubscriptionId)
+        {
+            await Firebase.UnsubscribeConfigurationAsync(configurationSubscriptionId);
         }
 
         firebaseCallback?.Dispose();
@@ -458,11 +465,47 @@
         firebaseSubscriptionId = await Firebase.SubscribeAppointmentsAsync(start, end, firebaseCallback);
     }
 
+    private async Task SubscribeConfigurationAsync()
+    {
+        if (!Firebase.IsConfigured || !Firebase.IsAuthenticated)
+        {
+            return;
+        }
+
+        firebaseCallback ??= DotNetObjectReference.Create(this);
+        firebaseConfigurationSubscriptionId = await Firebase.SubscribeConfigurationAsync(firebaseCallback);
+    }
+
     [JSInvokable]
     public Task OnFirebaseAppointmentsChanged(AppointmentResponse[] refreshedAppointments)
         => InvokeAsync(() =>
         {
-            appointments = refreshedAppointments;
+            appointments = refreshedAppointments.Select(WithCurrentServiceName).ToArray();
+            StateHasChanged();
+        });
+
+    private AppointmentResponse WithCurrentServiceName(AppointmentResponse appointment)
+    {
+        var serviceName = services.FirstOrDefault(service => service.Id == appointment.ServiceId)?.Name
+            ?? appointment.ServiceName;
+        return appointment with { ServiceName = serviceName };
+    }
+
+    [JSInvokable]
+    public Task OnFirebaseConfigurationChanged(SharedConfigurationResponse configuration)
+        => InvokeAsync(() =>
+        {
+            settings = configuration.Settings;
+            workers = configuration.Workers;
+            services = configuration.Services;
+            holidays = configuration.Holidays
+                .Select(holiday => new HolidayResponse(
+                    new DateTimeOffset(DateTime.SpecifyKind(
+                        holiday.Date.ToDateTime(TimeOnly.MinValue),
+                        DateTimeKind.Local)),
+                    holiday.Name))
+                .ToArray();
+            appointments = appointments.Select(WithCurrentServiceName).ToArray();
             StateHasChanged();
         });
 
@@ -471,6 +514,14 @@
         => InvokeAsync(() =>
         {
             errorMessage = $"No se pudieron sincronizar las citas en tiempo real: {message}";
+            StateHasChanged();
+        });
+
+    [JSInvokable]
+    public Task OnFirebaseConfigurationError(string message)
+        => InvokeAsync(() =>
+        {
+            errorMessage = $"No se pudo sincronizar la configuración: {message}";
             StateHasChanged();
         });
 

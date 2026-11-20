@@ -1,4 +1,4 @@
-import { firebaseConfig } from "./firebase-config.js";
+import { firebaseAdminUids, firebaseConfig } from "./firebase-config.js";
 
 const sdkBaseUrl = "https://www.gstatic.com/firebasejs/13.4.0";
 let authSdk;
@@ -63,6 +63,24 @@ function waitForUser() {
     });
 }
 
+function isAdmin(user = auth?.currentUser) {
+    return Boolean(user && firebaseAdminUids.includes(user.uid));
+}
+
+async function isAuthorized(user) {
+    if (!user) {
+        return false;
+    }
+
+    if (isAdmin(user)) {
+        return true;
+    }
+
+    const reference = firestoreSdk.doc(database, "authorizedUsers", user.uid);
+    const snapshot = await firestoreSdk.getDoc(reference);
+    return snapshot.exists();
+}
+
 async function requireUser() {
     if (!await ensureInitialized()) {
         throw new Error("Firebase no está configurado.");
@@ -74,6 +92,59 @@ async function requireUser() {
             throw new Error("Inicia sesión para acceder a las citas de Firebase.");
         }
     }
+}
+
+async function requireAdmin() {
+    await requireUser();
+    if (!isAdmin()) {
+        throw new Error("Solo el administrador puede gestionar los UID autorizados.");
+    }
+}
+
+function configurationFrom(data) {
+    const settings = data.settings ?? data.Settings;
+    if (!settings) {
+        throw new Error("La configuración compartida no contiene los datos de jornada.");
+    }
+
+    return {
+        settings: {
+            startTime: settings.startTime ?? settings.StartTime,
+            endTime: settings.endTime ?? settings.EndTime,
+            workDays: settings.workDays ?? settings.WorkDays,
+            workerCount: Number(settings.workerCount ?? settings.WorkerCount)
+        },
+        workers: (data.workers ?? data.Workers ?? []).map(worker => ({
+            id: Number(worker.id ?? worker.Id),
+            name: worker.name ?? worker.Name,
+            color: worker.color ?? worker.Color
+        })),
+        services: (data.services ?? data.Services ?? []).map(service => ({
+            id: Number(service.id ?? service.Id),
+            name: service.name ?? service.Name,
+            durationMinutes: Number(service.durationMinutes ?? service.DurationMinutes)
+        })),
+        holidays: (data.holidays ?? data.Holidays ?? []).map(holiday => ({
+            date: String(holiday.date ?? holiday.Date).slice(0, 10),
+            name: holiday.name ?? holiday.Name
+        }))
+    };
+}
+
+async function readLocalConfiguration() {
+    if (!globalThis.citasppStorage) {
+        throw new Error("No se pudo acceder a la configuración local para inicializar Firestore.");
+    }
+
+    const storedSnapshot = await globalThis.citasppStorage.readSnapshot();
+    const state = typeof storedSnapshot === "string"
+        ? JSON.parse(storedSnapshot)
+        : storedSnapshot;
+    if (!state) {
+        throw new Error("No hay una configuración local disponible para inicializar Firestore.");
+    }
+
+    return configurationFrom(state);
 }
 
 function serializeAppointment(appointment, id = appointment.id) {
@@ -192,16 +263,21 @@ async function migrateLocalAppointments() {
 
 export async function initialize() {
     if (!await ensureInitialized()) {
-        return { configured: false, authenticated: false, email: null };
+        return { configured: false, authenticated: false, authorized: false, email: null, isAdmin: false };
     }
 
     const user = await waitForUser();
-    const migratedAppointments = user ? await migrateLocalAppointments() : 0;
+    const authorized = await isAuthorized(user);
+    const migratedAppointments = user && authorized && isAdmin(user)
+        ? await migrateLocalAppointments()
+        : 0;
     return {
         configured: true,
         authenticated: Boolean(user),
+        authorized,
         email: user?.email ?? null,
-        migratedAppointments
+        migratedAppointments,
+        isAdmin: isAdmin(user)
     };
 }
 
@@ -211,8 +287,21 @@ export async function signIn(email, password) {
     }
 
     const credential = await authSdk.signInWithEmailAndPassword(auth, email, password);
-    const migratedAppointments = await migrateLocalAppointments();
-    return { email: credential.user.email, migratedAppointments };
+    const authorized = await isAuthorized(credential.user);
+    if (!authorized) {
+        await authSdk.signOut(auth);
+        throw new Error("Esta cuenta no está autorizada para acceder a la agenda.");
+    }
+
+    const migratedAppointments = isAdmin(credential.user)
+        ? await migrateLocalAppointments()
+        : 0;
+    return {
+        email: credential.user.email,
+        migratedAppointments,
+        isAdmin: isAdmin(credential.user),
+        authorized
+    };
 }
 
 export async function signOut() {
@@ -245,6 +334,103 @@ export async function getAppointment(id) {
     const reference = firestoreSdk.doc(database, "eventos", String(id));
     const snapshot = await firestoreSdk.getDoc(reference);
     return snapshot.exists() ? toAppointment(snapshot) : null;
+}
+
+export async function getConfiguration() {
+    await requireUser();
+    const reference = firestoreSdk.doc(database, "configuracion", "agenda");
+    const existing = await firestoreSdk.getDoc(reference);
+    if (existing.exists()) {
+        return configurationFrom(existing.data());
+    }
+
+    const localConfiguration = await readLocalConfiguration();
+    const storedConfiguration = await firestoreSdk.runTransaction(database, async transaction => {
+        const snapshot = await transaction.get(reference);
+        if (snapshot.exists()) {
+            return snapshot.data();
+        }
+
+        if (!isAdmin()) {
+            throw new Error("El administrador debe inicializar primero la configuración compartida.");
+        }
+
+        transaction.set(reference, localConfiguration);
+        return localConfiguration;
+    });
+    return configurationFrom(storedConfiguration);
+}
+
+export async function saveConfigurationSections(sections) {
+    await requireUser();
+    const allowedSections = ["settings", "workers", "services", "holidays"];
+    const values = {};
+    for (const [section, value] of Object.entries(sections)) {
+        if (!allowedSections.includes(section)) {
+            throw new Error("La sección de configuración no es válida.");
+        }
+
+        values[section] = section === "settings"
+            ? {
+                startTime: value.startTime,
+                endTime: value.endTime,
+                workDays: value.workDays,
+                workerCount: value.workerCount
+            }
+            : section === "workers"
+                ? value.map(worker => ({
+                    id: Number(worker.id ?? worker.Id),
+                    name: worker.name ?? worker.Name,
+                    color: worker.color ?? worker.Color
+                }))
+                : section === "services"
+                    ? value.map(service => ({
+                        id: Number(service.id ?? service.Id),
+                        name: service.name ?? service.Name,
+                        durationMinutes: Number(service.durationMinutes ?? service.DurationMinutes)
+                    }))
+                    : value.map(holiday => ({
+                        date: holiday.date ?? holiday.Date,
+                        name: holiday.name ?? holiday.Name
+                    }));
+    }
+
+    await firestoreSdk.setDoc(
+        firestoreSdk.doc(database, "configuracion", "agenda"),
+        values,
+        { merge: true });
+}
+
+export async function getAuthorizedUids() {
+    await requireAdmin();
+    const snapshot = await firestoreSdk.getDocs(
+        firestoreSdk.collection(database, "authorizedUsers"));
+    return [...new Set([
+        ...firebaseAdminUids,
+        ...snapshot.docs.map(document => document.id)
+    ])].sort();
+}
+
+export async function addAuthorizedUid(uid) {
+    await requireAdmin();
+    const normalizedUid = String(uid ?? "").trim();
+    if (!normalizedUid || normalizedUid.length > 128 || normalizedUid.includes("/")) {
+        throw new Error("Introduce un UID válido de Firebase (1 a 128 caracteres, sin barras).");
+    }
+
+    if (firebaseAdminUids.includes(normalizedUid)) {
+        throw new Error("Ese UID ya tiene acceso de administrador.");
+    }
+
+    const reference = firestoreSdk.doc(database, "authorizedUsers", normalizedUid);
+    if ((await firestoreSdk.getDoc(reference)).exists()) {
+        throw new Error("Ese UID ya está autorizado.");
+    }
+
+    await firestoreSdk.setDoc(reference, {
+        addedAt: firestoreSdk.serverTimestamp(),
+        addedBy: auth.currentUser.uid
+    });
 }
 
 export async function createAppointment(appointment) {
@@ -334,6 +520,38 @@ export async function subscribeAppointments(startText, endText, dotNetReference)
 }
 
 export async function unsubscribeAppointments(subscriptionId) {
+    const unsubscribe = subscriptions.get(subscriptionId);
+    if (unsubscribe) {
+        unsubscribe();
+        subscriptions.delete(subscriptionId);
+    }
+}
+
+export async function subscribeConfiguration(dotNetReference) {
+    await requireUser();
+    const reference = firestoreSdk.doc(database, "configuracion", "agenda");
+    const subscriptionId = nextSubscriptionId++;
+    const unsubscribe = firestoreSdk.onSnapshot(
+        reference,
+        snapshot => {
+            if (!snapshot.exists()) {
+                return;
+            }
+
+            dotNetReference.invokeMethodAsync(
+                "OnFirebaseConfigurationChanged",
+                configurationFrom(snapshot.data()))
+                .catch(error => console.error("No se pudo actualizar la configuración en la interfaz.", error));
+        },
+        error => {
+            dotNetReference.invokeMethodAsync("OnFirebaseConfigurationError", error.message)
+                .catch(callbackError => console.error("No se pudo mostrar el error de configuración.", callbackError));
+        });
+    subscriptions.set(subscriptionId, unsubscribe);
+    return subscriptionId;
+}
+
+export async function unsubscribeConfiguration(subscriptionId) {
     const unsubscribe = subscriptions.get(subscriptionId);
     if (unsubscribe) {
         unsubscribe();

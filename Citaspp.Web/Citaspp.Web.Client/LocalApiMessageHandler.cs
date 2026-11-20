@@ -32,14 +32,28 @@ internal sealed class LocalApiMessageHandler(
             var state = await LoadStateAsync(cancellationToken);
             try
             {
+                var configurationSection = GetConfigurationSection(request);
+                if (firebaseClient.IsConfigured && firebaseClient.IsAuthenticated)
+                {
+                    await RefreshCloudConfigurationAsync(state);
+                }
+
                 var result = await RouteAsync(request, state, cancellationToken);
                 if (result.Persist)
                 {
+                    if (configurationSection is not null &&
+                        firebaseClient.IsConfigured &&
+                        firebaseClient.IsAuthenticated)
+                    {
+                        await SaveCloudConfigurationAsync(configurationSection, state);
+                    }
+
                     await SaveStateAsync(state, cancellationToken);
                 }
 
                 return CreateResponse(request, result);
             }
+
             catch (LocalApiException exception)
             {
                 return CreateProblemResponse(request, exception.StatusCode, exception.Message);
@@ -240,7 +254,10 @@ internal sealed class LocalApiMessageHandler(
             var appointments = await firebaseClient.GetAppointmentsAsync(start, end);
             return new RouteResult(
                 (int)HttpStatusCode.OK,
-                appointments.OrderBy(appointment => appointment.StartsAt).ToArray());
+                appointments
+                    .OrderBy(appointment => appointment.StartsAt)
+                    .Select(appointment => MapAppointment(state, appointment))
+                    .ToArray());
         }
 
         if (segments.Length == 2 && request.Method == HttpMethod.Post)
@@ -304,7 +321,7 @@ internal sealed class LocalApiMessageHandler(
                 var existing = await firebaseClient.GetAppointmentAsync(id);
                 return existing is null
                     ? new RouteResult((int)HttpStatusCode.NotFound)
-                    : new RouteResult((int)HttpStatusCode.OK, existing);
+                    : new RouteResult((int)HttpStatusCode.OK, MapAppointment(state, existing));
             }
 
             if (request.Method == HttpMethod.Put)
@@ -356,6 +373,72 @@ internal sealed class LocalApiMessageHandler(
         }
     }
 
+    private async Task RefreshCloudConfigurationAsync(LocalScheduleState state)
+    {
+        var configuration = await firebaseClient.GetConfigurationAsync();
+        state.Settings = configuration.Settings;
+        state.Workers = configuration.Workers.ToList();
+        state.Services = configuration.Services.ToList();
+        state.Holidays = configuration.Holidays
+            .Select(holiday => new HolidayResponse(ToLocalDateOffset(holiday.Date), holiday.Name))
+            .ToList();
+        state.NextServiceId = Math.Max(
+            state.NextServiceId,
+            state.Services.Count == 0 ? 1 : state.Services.Max(service => service.Id) + 1);
+    }
+
+    private async Task SaveCloudConfigurationAsync(string section, LocalScheduleState state)
+    {
+        var sections = section switch
+        {
+            "settings" => new Dictionary<string, object>
+            {
+                ["settings"] = state.Settings,
+                ["workers"] = state.Workers.OrderBy(worker => worker.Id).ToArray()
+            },
+            "workers" => new Dictionary<string, object>
+            {
+                ["workers"] = state.Workers.OrderBy(worker => worker.Id).ToArray()
+            },
+            "services" => new Dictionary<string, object>
+            {
+                ["services"] = state.Services.OrderBy(service => service.Id).ToArray()
+            },
+            "holidays" => new Dictionary<string, object>
+            {
+                ["holidays"] = state.Holidays
+                    .OrderBy(holiday => holiday.Date)
+                    .Select(holiday => new SharedHolidayResponse(
+                        DateOnly.FromDateTime(holiday.Date.LocalDateTime),
+                        holiday.Name))
+                    .ToArray()
+            },
+            _ => throw new InvalidOperationException("La sección de configuración no es válida.")
+        };
+        await firebaseClient.SaveConfigurationSectionsAsync(sections);
+    }
+
+    private static string? GetConfigurationSection(HttpRequestMessage request)
+    {
+        var segments = request.RequestUri?.AbsolutePath
+            .Trim('/')
+            .Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments is null)
+        {
+            return null;
+        }
+
+        var apiIndex = Array.IndexOf(segments, "api");
+        if (apiIndex < 0 || segments.Length <= apiIndex + 1)
+        {
+            return null;
+        }
+
+        return segments[apiIndex + 1] is "settings" or "workers" or "services" or "holidays"
+            ? segments[apiIndex + 1]
+            : null;
+    }
+
     private async Task<RouteResult> RouteSettingsAsync(
         HttpRequestMessage request,
         string[] segments,
@@ -383,6 +466,11 @@ internal sealed class LocalApiMessageHandler(
                 .Any(day => !Enum.TryParse<DayOfWeek>(day, true, out var parsed) || !Enum.IsDefined(parsed)))
         {
             throw new LocalApiException((int)HttpStatusCode.BadRequest, "Hay un día laborable no válido.");
+        }
+
+        if (firebaseClient.IsConfigured && firebaseClient.IsAuthenticated)
+        {
+            await RefreshCloudAppointmentsAsync(state);
         }
 
         var normalizedDays = body.WorkDays
@@ -504,6 +592,11 @@ internal sealed class LocalApiMessageHandler(
                 if (state.Services.All(service => service.Id != id))
                 {
                     return new RouteResult((int)HttpStatusCode.NotFound);
+                }
+
+                if (firebaseClient.IsConfigured && firebaseClient.IsAuthenticated)
+                {
+                    await RefreshCloudAppointmentsAsync(state);
                 }
 
                 if (state.Appointments.Any(appointment => appointment.ServiceId == id))

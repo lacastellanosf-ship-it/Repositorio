@@ -30,14 +30,14 @@ El flujo de GitHub Actions publica automáticamente la versión WebAssembly est�
 
 Antes del primer despliegue, en el repositorio abre **Settings > Pages** y elige **GitHub Actions** como origen de publicación. La página estará en `https://<usuario>.github.io/<repositorio>/`.
 
-Al configurar Firebase, las citas se guardan en Cloud Firestore y se actualizan en tiempo real entre dispositivos. Los trabajadores, servicios, festivos y horario todavía se guardan localmente en cada navegador.
+Al configurar Firebase, las citas y la configuración compartida (horario, trabajadores, servicios y festivos) se guardan en Cloud Firestore y se actualizan entre dispositivos.
 
 ### Activar Firebase Firestore
 
 1. Crea un proyecto Firebase, registra una aplicación web y activa **Cloud Firestore**.
-2. En **Authentication > Sign-in method**, activa **Correo electrónico/contraseña**. Crea manualmente los usuarios autorizados; la aplicación no ofrece registro público.
+2. En **Authentication > Sign-in method**, activa **Correo electrónico/contraseña**. Crea manualmente la cuenta inicial de administración; la aplicación no ofrece registro público.
 3. En **Configuración del proyecto > Tus aplicaciones**, copia la configuración web en `Citaspp.Web\Citaspp.Web.Client\wwwroot\firebase-config.js`, sustituyendo los campos `PEGA_AQUI_...`.
-4. En **Authentication > Users**, confirma que el UID de cada usuario autorizado está incluido en la lista de `Citaspp.Web\firestore.rules`. La primera cuenta ya está añadida; agrega más UID a esa lista si hacen falta.
+4. Comprueba que el UID inicial esté en `firebaseAdminUids` dentro de `firebase-config.js` y como administrador en `Citaspp.Web\firestore.rules`.
 5. Publica las reglas desde la carpeta `Citaspp.Web`:
 
    ```powershell
@@ -45,9 +45,13 @@ Al configurar Firebase, las citas se guardan en Cloud Firestore y se actualizan 
    ```
 
 6. En Firebase Authentication, añade `lacastellanosf-ship-it.github.io` a los dominios autorizados.
-7. Publica los cambios de la aplicación en GitHub Pages. Al abrir la página, inicia sesión con una cuenta cuyo UID esté autorizado.
+7. Publica los cambios de la aplicación en GitHub Pages e inicia sesión con la cuenta de administración.
 
-La configuración web de Firebase no es una contraseña; el control de acceso lo aplican las reglas de Firestore. No pongas contraseñas ni claves privadas de cuentas de servicio en `firebase-config.js`, y no cambies las reglas para permitir acceso público. En el primer inicio de sesión, si `eventos` está vacío, las citas de IndexedDB de ese dispositivo se importan una sola vez. Conviene hacerlo primero desde el dispositivo que contiene la agenda que quieras conservar. Los datos de otros dispositivos no se importan si la colección ya contiene citas.
+Desde **Configuración > Accesos**, la cuenta de administración puede añadir UID de usuarios ya creados en **Authentication > Users**. Solo esa cuenta puede conceder acceso; los demás usuarios autorizados pueden editar la configuración compartida.
+
+La primera vez que se abra la agenda en Firebase, la configuración local del dispositivo administrador se copia a `configuracion/agenda`. Inicia sesión primero desde el dispositivo cuya configuración quieras conservar. Las citas de IndexedDB también se importan una sola vez si `eventos` está vacío. Los datos locales de otros dispositivos no se importan una vez creados esos datos en Firestore.
+
+La configuración web de Firebase no es una contraseña; el control de acceso lo aplican las reglas de Firestore. No pongas contraseñas ni claves privadas de cuentas de servicio en `firebase-config.js`, y no cambies las reglas para permitir acceso público.
 
 ## Funciones
 

@@ -86,6 +86,16 @@ public sealed record ScheduleSettingsResponse(
     string[] WorkDays,
     int WorkerCount);
 
+/// <summary>Shared schedule, workers, services, and holidays stored in Firestore.</summary>
+public sealed record SharedConfigurationResponse(
+    ScheduleSettingsResponse Settings,
+    WorkerResponse[] Workers,
+    ServiceResponse[] Services,
+    SharedHolidayResponse[] Holidays);
+
+/// <summary>Holiday data stored as a calendar date, independent of device time zones.</summary>
+public sealed record SharedHolidayResponse(DateOnly Date, string Name);
+
 /// <summary>Schedule and worker-count values to save.</summary>
 public sealed record UpdateScheduleSettingsRequest
 {

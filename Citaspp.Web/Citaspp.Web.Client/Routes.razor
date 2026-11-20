@@ -45,6 +45,21 @@ else if (Firebase.IsConfigured && !Firebase.IsAuthenticated)
         </section>
     </main>
 }
+else if (Firebase.IsConfigured && !Firebase.IsAuthorized)
+{
+    <main class="app-shell firebase-login-shell">
+        <a class="brand" href="./" aria-label="Citas, agenda">
+            <span class="brand-mark">C</span>
+            <span>CITAS<span class="brand-dot">.</span></span>
+        </a>
+        <section class="firebase-login-panel">
+            <p class="eyebrow">ACCESO A LA AGENDA</p>
+            <h1>Cuenta sin autorización</h1>
+            <p class="welcome-copy">Pide al administrador que añada tu UID desde Configuración &gt; Accesos.</p>
+            <button type="button" class="outline-button" @onclick="SignOut">Cerrar sesión</button>
+        </section>
+    </main>
+}
 else
 {
     @if (migratedAppointments > 0)
@@ -106,6 +121,19 @@ else
         finally
         {
             isSigningIn = false;
+        }
+    }
+
+    private async Task SignOut()
+    {
+        initializationError = null;
+        try
+        {
+            await Firebase.SignOutAsync();
+        }
+        catch (JSException exception)
+        {
+            initializationError = FirebaseClient.UserFriendlyError(exception);
         }
     }
 

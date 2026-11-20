@@ -27,11 +27,16 @@
         <div>
             <p class="eyebrow">AJUSTES DE LA AGENDA</p>
             <h1>Configuración</h1>
-            <p class="welcome-copy">Define la jornada, el equipo, los servicios y los festivos.</p>
+            <p class="welcome-copy">@(Firebase.IsConfigured
+                ? "Horario, trabajadores, servicios y festivos compartidos entre dispositivos."
+                : "Define la jornada, el equipo, los servicios y los festivos.")</p>
         </div>
-        <button type="button" class="primary-button" disabled="@isSaving" @onclick="SaveConfiguration">
-            @(isSaving ? "Guardando..." : "Guardar configuración")
-        </button>
+        @if (activeTab != "access")
+        {
+            <button type="button" class="primary-button" disabled="@isSaving" @onclick="SaveConfiguration">
+                @(isSaving ? "Guardando..." : "Guardar configuración")
+            </button>
+        }
     </section>
 
     @if (!string.IsNullOrWhiteSpace(configurationError))
@@ -58,6 +63,10 @@
                 <button type="button" class="settings-tab @(activeTab == "workers" ? "selected" : "")" @onclick='() => activeTab = "workers"'>Trabajadores</button>
                 <button type="button" class="settings-tab @(activeTab == "services" ? "selected" : "")" @onclick='() => activeTab = "services"'>Servicios</button>
                 <button type="button" class="settings-tab @(activeTab == "holidays" ? "selected" : "")" @onclick='() => activeTab = "holidays"'>Festivos</button>
+                @if (Firebase.IsAdmin)
+                {
+                    <button type="button" class="settings-tab @(activeTab == "access" ? "selected" : "")" @onclick='() => activeTab = "access"'>Accesos</button>
+                }
             </nav>
 
             @if (activeTab == "schedule")
@@ -172,7 +181,7 @@
                     </div>
                 </section>
             }
-            else
+            else if (activeTab == "holidays")
             {
                 <section class="settings-content">
                     <div class="settings-section-heading settings-heading-with-action">
@@ -243,13 +252,49 @@
                     </div>
                 </section>
             }
+            else
+            {
+                <section class="settings-content">
+                    <div class="settings-section-heading">
+                        <h2>Acceso de usuarios</h2>
+                        <p>Añade el UID de una cuenta ya creada en Firebase Authentication para compartir la agenda.</p>
+                    </div>
+                    <div class="authorized-user-form">
+                        <label class="form-field">
+                            <span>UID de Firebase</span>
+                            <input @bind="authorizedUid" maxlength="128" autocomplete="off" spellcheck="false" />
+                        </label>
+                        <button type="button" class="primary-button" disabled="@isAddingUid" @onclick="AddAuthorizedUid">
+                            @(isAddingUid ? "Añadiendo..." : "Añadir UID")
+                        </button>
+                    </div>
+                    <p class="helper-text">La cuenta debe existir primero en Authentication. Después, su titular podrá iniciar sesión con su propio correo y contraseña.</p>
+                    @if (!string.IsNullOrWhiteSpace(accessError))
+                    {
+                        <div class="notice error-notice" role="alert">@accessError</div>
+                    }
+                    @if (authorizedUids.Count > 0)
+                    {
+                        <div class="authorized-user-list">
+                            <h3>UID con acceso</h3>
+                            @foreach (var uid in authorizedUids)
+                            {
+                                <code>@uid</code>
+                            }
+                        </div>
+                    }
+                </section>
+            }
 
-            <footer class="settings-footer">
-                <span>Los cambios se aplican al guardar.</span>
-                <button type="button" class="primary-button" disabled="@isSaving" @onclick="SaveConfiguration">
-                    @(isSaving ? "Guardando..." : "Guardar configuración")
-                </button>
-            </footer>
+            @if (activeTab != "access")
+            {
+                <footer class="settings-footer">
+                    <span>Los cambios se aplican al guardar.</span>
+                    <button type="button" class="primary-button" disabled="@isSaving" @onclick="SaveConfiguration">
+                        @(isSaving ? "Guardando..." : "Guardar configuración")
+                    </button>
+                </footer>
+            }
         </section>
     }
 </main>
@@ -299,12 +344,20 @@
     private bool holidayImportIsError;
     private string? configurationError;
     private string? configurationSuccess;
+    private string authorizedUid = string.Empty;
+    private List<string> authorizedUids = [];
+    private string? accessError;
+    private bool isAddingUid;
 
     protected override async Task OnInitializedAsync()
     {
         try
         {
             await LoadConfiguration();
+            if (Firebase.IsAdmin)
+            {
+                authorizedUids = (await Firebase.GetAuthorizedUidsAsync()).ToList();
+            }
         }
         catch (HttpRequestException)
         {
@@ -313,6 +366,10 @@
         catch (System.Text.Json.JsonException)
         {
             configurationError = "El servidor devolvió datos que no se pudieron interpretar.";
+        }
+        catch (JSException exception)
+        {
+            configurationError = FirebaseClient.UserFriendlyError(exception);
         }
         finally
         {
@@ -698,6 +755,37 @@
         finally
         {
             isSaving = false;
+        }
+    }
+
+    private async Task AddAuthorizedUid()
+    {
+        accessError = null;
+        configurationSuccess = null;
+        var uid = authorizedUid.Trim();
+        if (string.IsNullOrWhiteSpace(uid) || uid.Length > 128 || uid.Contains('/'))
+        {
+            accessError = "Introduce un UID válido de Firebase (1 a 128 caracteres, sin barras).";
+            return;
+        }
+
+        isAddingUid = true;
+        try
+        {
+            await Firebase.AddAuthorizedUidAsync(uid);
+            authorizedUids = (await Firebase.GetAuthorizedUidsAsync()).ToList();
+            authorizedUid = string.Empty;
+            configurationSuccess = "UID añadido. La persona ya puede iniciar sesión en la agenda.";
+        }
+        catch (JSException exception)
+        {
+            accessError = exception.Message.Contains("UID", StringComparison.OrdinalIgnoreCase)
+                ? exception.Message
+                : FirebaseClient.UserFriendlyError(exception);
+        }
+        finally
+        {
+            isAddingUid = false;
         }
     }
 

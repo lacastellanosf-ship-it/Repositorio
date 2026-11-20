@@ -2,9 +2,21 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isAdmin() {
+      return request.auth != null
+        && request.auth.uid == "ENQUYqGqpgQK8L5Uoe7tnGWe2Xg2";
+    }
+
     function hasAgendaAccess() {
       return request.auth != null
-        && request.auth.uid in ["ENQUYqGqpgQK8L5Uoe7tnGWe2Xg2"];
+        && (isAdmin()
+          || exists(/databases/$(database)/documents/authorizedUsers/$(request.auth.uid)));
+    }
+
+    match /authorizedUsers/{uid} {
+      allow get: if isAdmin() || (request.auth != null && request.auth.uid == uid);
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin();
     }
 
     match /eventos/{eventId} {
@@ -13,6 +25,13 @@ service cloud.firestore {
 
     match /metadata/{documentId} {
       allow read, write: if hasAgendaAccess();
+    }
+
+    match /configuracion/{documentId} {
+      allow read: if hasAgendaAccess();
+      allow create: if isAdmin();
+      allow update: if hasAgendaAccess();
+      allow delete: if isAdmin();
     }
   }
 }

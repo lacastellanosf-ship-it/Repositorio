@@ -10,6 +10,8 @@ public sealed class FirebaseClient(IJSRuntime jsRuntime) : IAsyncDisposable
 
     public bool IsConfigured { get; private set; }
     public bool IsAuthenticated { get; private set; }
+    public bool IsAuthorized { get; private set; }
+    public bool IsAdmin { get; private set; }
     public string? UserEmail { get; private set; }
     public event Action? StateChanged;
 
@@ -18,6 +20,8 @@ public sealed class FirebaseClient(IJSRuntime jsRuntime) : IAsyncDisposable
         var result = await (await GetModuleAsync()).InvokeAsync<FirebaseStatus>("initialize");
         IsConfigured = result.Configured;
         IsAuthenticated = result.Authenticated;
+        IsAuthorized = result.Authorized;
+        IsAdmin = result.IsAdmin;
         UserEmail = result.Email;
         StateChanged?.Invoke();
     }
@@ -27,6 +31,8 @@ public sealed class FirebaseClient(IJSRuntime jsRuntime) : IAsyncDisposable
         var result = await (await GetModuleAsync())
             .InvokeAsync<FirebaseSignInResult>("signIn", email, password);
         IsAuthenticated = true;
+        IsAuthorized = result.Authorized;
+        IsAdmin = result.IsAdmin;
         UserEmail = result.Email;
         StateChanged?.Invoke();
         return result.MigratedAppointments;
@@ -36,6 +42,8 @@ public sealed class FirebaseClient(IJSRuntime jsRuntime) : IAsyncDisposable
     {
         await (await GetModuleAsync()).InvokeVoidAsync("signOut");
         IsAuthenticated = false;
+        IsAuthorized = false;
+        IsAdmin = false;
         UserEmail = null;
         StateChanged?.Invoke();
     }
@@ -51,6 +59,18 @@ public sealed class FirebaseClient(IJSRuntime jsRuntime) : IAsyncDisposable
 
     public async Task<AppointmentResponse?> GetAppointmentAsync(int id)
         => await (await GetModuleAsync()).InvokeAsync<AppointmentResponse?>("getAppointment", id);
+
+    public async Task<SharedConfigurationResponse> GetConfigurationAsync()
+        => await (await GetModuleAsync()).InvokeAsync<SharedConfigurationResponse>("getConfiguration");
+
+    public async Task SaveConfigurationSectionsAsync(IReadOnlyDictionary<string, object> sections)
+        => await (await GetModuleAsync()).InvokeVoidAsync("saveConfigurationSections", sections);
+
+    public async Task<string[]> GetAuthorizedUidsAsync()
+        => await (await GetModuleAsync()).InvokeAsync<string[]>("getAuthorizedUids");
+
+    public async Task AddAuthorizedUidAsync(string uid)
+        => await (await GetModuleAsync()).InvokeVoidAsync("addAuthorizedUid", uid);
 
     public async Task<int> CreateAppointmentAsync(AppointmentResponse appointment)
         => await (await GetModuleAsync()).InvokeAsync<int>("createAppointment", appointment);
@@ -81,6 +101,13 @@ public sealed class FirebaseClient(IJSRuntime jsRuntime) : IAsyncDisposable
     public async Task UnsubscribeAppointmentsAsync(int subscriptionId)
         => await (await GetModuleAsync()).InvokeVoidAsync("unsubscribeAppointments", subscriptionId);
 
+    public async Task<int> SubscribeConfigurationAsync<T>(DotNetObjectReference<T> callback)
+        where T : class
+        => await (await GetModuleAsync()).InvokeAsync<int>("subscribeConfiguration", callback);
+
+    public async Task UnsubscribeConfigurationAsync(int subscriptionId)
+        => await (await GetModuleAsync()).InvokeVoidAsync("unsubscribeConfiguration", subscriptionId);
+
     public static string UserFriendlyError(Exception exception)
     {
         var message = exception.Message;
@@ -98,7 +125,13 @@ public sealed class FirebaseClient(IJSRuntime jsRuntime) : IAsyncDisposable
 
         if (message.Contains("permission-denied", StringComparison.OrdinalIgnoreCase))
         {
-            return "Firebase rechazó el acceso. Comprueba que tu UID esté autorizado en firestore.rules.";
+            return "Firebase rechazó el acceso. Comprueba que la cuenta tenga un UID autorizado.";
+        }
+
+        if (message.Contains("no está autorizada", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("no está autorizado", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Esta cuenta no tiene acceso. Pide al administrador que añada su UID en Configuración > Accesos.";
         }
 
         return "No se pudo conectar con Firebase. Comprueba la configuración y las reglas de Firestore.";
@@ -118,6 +151,15 @@ public sealed class FirebaseClient(IJSRuntime jsRuntime) : IAsyncDisposable
         return module;
     }
 
-    public sealed record FirebaseStatus(bool Configured, bool Authenticated, string? Email);
-    public sealed record FirebaseSignInResult(string? Email, int MigratedAppointments);
+    public sealed record FirebaseStatus(
+        bool Configured,
+        bool Authenticated,
+        bool Authorized,
+        string? Email,
+        bool IsAdmin);
+    public sealed record FirebaseSignInResult(
+        string? Email,
+        int MigratedAppointments,
+        bool IsAdmin,
+        bool Authorized);
 }
